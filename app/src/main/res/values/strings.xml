@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">Image Generator</string>
+    <string name="app_subtitle">Offline AI • Create • Edit • Enjoy</string>
+    <string name="app_short_subtitle">Create • Edit • Enjoy</string>
+    <string name="hero_tagline">Turn Your\nImagination\ninto Reality</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_favorites">Favorites</string>
+    <string name="nav_creations">My Creations</string>
+    <string name="nav_models">Models</string>
+    <string name="settings_title">Settings</string>
+    <string name="card_text_to_image">Text to\nImage</string>
+    <string name="card_image_to_image">Image to\nImage</string>
+    <string name="card_character_studio">Character\nStudio</string>
+    <string name="card_face_swap">Face\nSwap</string>
+    <string name="card_image_editor">Image\nEditor</string>
+    <string name="card_my_gallery">My\nGallery</string>
+    <string name="cd_app_logo">Image Generator App Logo</string>
+    <string name="cd_settings_button">Open Settings</string>
+    <string name="cd_back_button">Navigate Back</string>
+    <string name="cd_hero_portrait">Creative Studio Portrait Banner</string>
+</resources>

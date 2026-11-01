@@ -1,0 +1,6 @@
+{
+  "name": "Image Generator",
+  "description": "Offline AI • Create • Edit • Enjoy — Standalone offline AI image generator Android app.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
