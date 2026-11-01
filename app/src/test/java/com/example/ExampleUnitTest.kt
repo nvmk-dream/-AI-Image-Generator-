@@ -99,4 +99,45 @@ class ExampleUnitTest {
             ).allowed
         )
     }
+
+    @Test
+    fun img2ImgStrengthAndNoiseInjection_behavesConsistently() {
+        // Low strength (0.25 on 8 steps -> 2 active steps -> startStepIndex = 6)
+        assertEquals(6, DiffusionSchedulers.computeImg2ImgStartStep(totalSteps = 8, strength = 0.25f))
+        // Medium strength (0.50 on 8 steps -> 4 active steps -> startStepIndex = 4)
+        assertEquals(4, DiffusionSchedulers.computeImg2ImgStartStep(totalSteps = 8, strength = 0.50f))
+        // High strength (0.90 on 10 steps -> 9 active steps -> startStepIndex = 1)
+        assertEquals(1, DiffusionSchedulers.computeImg2ImgStartStep(totalSteps = 10, strength = 0.90f))
+
+        val cleanLatents = FloatArray(4 * 8 * 8) { 0.25f }
+        val lcm = DiffusionSchedulers.LcmSession(8)
+        val lcmNoisy = lcm.addNoise(cleanLatents, startStepIndex = 4, seed = 99L)
+        assertEquals(cleanLatents.size, lcmNoisy.size)
+        assertTrue(lcmNoisy.all { it.isFinite() })
+
+        val euler = DiffusionSchedulers.EulerSession(16)
+        val eulerNoisy = euler.addNoise(cleanLatents, startStepIndex = 6, seed = 99L)
+        assertEquals(cleanLatents.size, eulerNoisy.size)
+        assertTrue(eulerNoisy.all { it.isFinite() })
+    }
+
+    @Test
+    fun pixelNormalization_mapsBytesToMinusOneToOneRange() {
+        val black = 0xFF000000.toInt()
+        val white = 0xFFFFFFFF.toInt()
+        val midRed = 0xFF800000.toInt()
+        val pixels = intArrayOf(black, white, midRed)
+
+        val nchw = com.example.ai.ImageBitmapPreprocessor.pixelsToNormalizedFloats(pixels, isNhwc = false)
+        assertEquals(9, nchw.size)
+        // R channel: black -> -1.0, white -> +1.0, midRed (128) -> ~0.0039
+        assertTrue(abs(nchw[0] - (-1.0f)) < 1e-4f)
+        assertTrue(abs(nchw[1] - 1.0f) < 1e-4f)
+        assertTrue(abs(nchw[2] - ((128f / 127.5f) - 1.0f)) < 1e-4f)
+
+        val nhwc = com.example.ai.ImageBitmapPreprocessor.pixelsToNormalizedFloats(pixels, isNhwc = true)
+        assertEquals(9, nhwc.size)
+        assertTrue(abs(nhwc[0] - (-1.0f)) < 1e-4f)
+        assertTrue(abs(nhwc[3] - 1.0f) < 1e-4f)
+    }
 }

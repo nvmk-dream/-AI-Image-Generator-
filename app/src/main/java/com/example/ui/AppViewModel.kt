@@ -60,6 +60,8 @@ data class ImageGeneratorUiState(
     val generationProgress: GenerationProgress? = null,
     val generationErrorMessage: String? = null,
     val latestGeneratedCreation: GeneratedCreation? = null,
+    val latestImg2ImgCreation: GeneratedCreation? = null,
+    val latestImg2ImgSourcePath: String? = null,
     val statusToastMessage: String? = null,
     val userPromptInput: String = "",
     val selectedInputPhotoUri: Uri? = null
@@ -77,6 +79,8 @@ private data class TransientUiState(
     val generationProgress: GenerationProgress? = null,
     val generationErrorMessage: String? = null,
     val latestGeneratedCreation: GeneratedCreation? = null,
+    val latestImg2ImgCreation: GeneratedCreation? = null,
+    val latestImg2ImgSourcePath: String? = null,
     val statusToastMessage: String? = null,
     val userPromptInput: String? = null,
     val selectedInputPhotoUri: Uri? = null,
@@ -118,6 +122,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             generationErrorMessage = transient.generationErrorMessage,
             latestGeneratedCreation = transient.latestGeneratedCreation
                 ?: transient.creations.firstOrNull(),
+            latestImg2ImgCreation = transient.latestImg2ImgCreation,
+            latestImg2ImgSourcePath = transient.latestImg2ImgSourcePath,
             statusToastMessage = transient.statusToastMessage,
             userPromptInput = effectiveUserPrompt,
             selectedInputPhotoUri = transient.selectedInputPhotoUri
@@ -225,7 +231,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateSelectedInputPhoto(uri: Uri?) {
-        transientState.update { it.copy(selectedInputPhotoUri = uri) }
+        transientState.update {
+            it.copy(
+                selectedInputPhotoUri = uri,
+                generationErrorMessage = null
+            )
+        }
     }
 
     fun clearToast() {
@@ -388,6 +399,135 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Phase 5: Offline Image-to-Image Execution (VAE Encoder -> Text Encoder -> UNet -> VAE Decoder)
+    fun generateOfflineImageToImage(
+        sampler: SamplerType,
+        strength: Float,
+        steps: Int,
+        guidanceScale: Float,
+        seed: Long,
+        negativePrompt: String
+    ) {
+        if (transientState.value.isGenerating) return
+
+        val stateSnapshot = uiState.value
+        val sourceUri = stateSnapshot.selectedInputPhotoUri
+        if (sourceUri == null) {
+            transientState.update {
+                it.copy(
+                    generationErrorMessage = if (stateSnapshot.preferences.isTamil) {
+                        "முதலில் மாற்ற வேண்டிய Reference புகைப்படத்தைத் தேர்வு செய்யவும்."
+                    } else {
+                        "Please select a Reference Photo from Gallery first."
+                    }
+                )
+            }
+            return
+        }
+
+        val userPrompt = stateSnapshot.userPromptInput.trim()
+        if (userPrompt.isEmpty()) {
+            transientState.update {
+                it.copy(
+                    generationErrorMessage = if (stateSnapshot.preferences.isTamil) {
+                        "படத்தை எப்படி மாற்ற வேண்டும் என்ற Prompt-ஐ எழுதவும்."
+                    } else {
+                        "Please enter a transformation prompt first."
+                    }
+                )
+            }
+            return
+        }
+
+        // Final Generation Input = User Image Prompt + Saved Content Safety Prompt
+        val finalGenerationInput = stateSnapshot.preferences.buildFinalGenerationInput(userPrompt)
+
+        activeGenerationJob = viewModelScope.launch {
+            transientState.update {
+                it.copy(
+                    isGenerating = true,
+                    generationErrorMessage = null,
+                    generationProgress = GenerationProgress(
+                        stageTitle = "Preparing Offline Image-to-Image Pipeline...",
+                        currentStep = 0,
+                        totalSteps = steps,
+                        percent = 2,
+                        elapsedMs = 0L
+                    )
+                )
+            }
+
+            val result = withContext(Dispatchers.Default) {
+                diffusionEngine.generateImageToImage(
+                    sourceImageUri = sourceUri,
+                    userPrompt = userPrompt,
+                    finalGenerationInput = finalGenerationInput,
+                    negativePrompt = negativePrompt,
+                    strength = strength,
+                    resolutionLabel = stateSnapshot.preferences.resolution,
+                    inferenceMode = stateSnapshot.preferences.inferenceMode,
+                    samplerType = sampler,
+                    steps = steps,
+                    guidanceScale = guidanceScale,
+                    seed = seed,
+                    onProgress = { prog ->
+                        transientState.update { s -> s.copy(generationProgress = prog) }
+                    }
+                )
+            }
+
+            result.fold(
+                onSuccess = { out ->
+                    val savedCreation = withContext(Dispatchers.IO) {
+                        creationsRepo.saveCreation(
+                            bitmap = out.bitmap,
+                            userPrompt = userPrompt,
+                            finalGenerationInput = out.finalGenerationInput,
+                            resolution = out.resolutionLabel,
+                            steps = out.activeSteps,
+                            seed = out.seed,
+                            durationMs = out.durationMs
+                        )
+                    }
+                    val allCreations = withContext(Dispatchers.IO) {
+                        creationsRepo.loadAllCreations()
+                    }
+                    val refreshedMetrics = withContext(Dispatchers.IO) {
+                        modelManager.inspectCurrentMetrics()
+                    }
+                    transientState.update {
+                        it.copy(
+                            isGenerating = false,
+                            generationProgress = null,
+                            creations = allCreations,
+                            latestGeneratedCreation = savedCreation,
+                            latestImg2ImgCreation = savedCreation,
+                            latestImg2ImgSourcePath = out.croppedSourceFile.absolutePath,
+                            metrics = refreshedMetrics,
+                            statusToastMessage = "Image transformed offline in ${out.durationMs / 1000}s!"
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    val cancelled = err is CancellationException ||
+                        err.message?.contains("cancelled", ignoreCase = true) == true
+                    val refreshedMetrics = withContext(Dispatchers.IO) {
+                        modelManager.inspectCurrentMetrics()
+                    }
+                    transientState.update {
+                        it.copy(
+                            isGenerating = false,
+                            generationProgress = null,
+                            metrics = refreshedMetrics,
+                            generationErrorMessage = if (cancelled) null else err.message,
+                            statusToastMessage = if (cancelled) "Transformation cancelled & RAM freed." else null
+                        )
+                    }
+                }
+            )
+        }
+    }
+
     fun cancelGeneration() {
         diffusionEngine.requestCancel()
         activeGenerationJob?.cancel()
@@ -433,6 +573,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     creations = updated,
                     latestGeneratedCreation = state.latestGeneratedCreation?.let { latest ->
                         updated.firstOrNull { it.id == latest.id } ?: latest
+                    },
+                    latestImg2ImgCreation = state.latestImg2ImgCreation?.let { latest ->
+                        updated.firstOrNull { it.id == latest.id } ?: latest
                     }
                 )
             }
@@ -449,6 +592,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         updated.firstOrNull()
                     } else {
                         state.latestGeneratedCreation
+                    },
+                    latestImg2ImgCreation = if (state.latestImg2ImgCreation?.id == id) {
+                        null
+                    } else {
+                        state.latestImg2ImgCreation
                     },
                     statusToastMessage = "Deleted image."
                 )

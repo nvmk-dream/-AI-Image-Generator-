@@ -7,6 +7,7 @@ import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -33,6 +34,18 @@ data class TextToImageResult(
     val normalizedClipPrompt: String,
     val seed: Long,
     val steps: Int,
+    val resolutionLabel: String,
+    val durationMs: Long
+)
+
+data class ImageToImageResult(
+    val bitmap: Bitmap,
+    val croppedSourceFile: File,
+    val finalGenerationInput: String,
+    val normalizedClipPrompt: String,
+    val strength: Float,
+    val seed: Long,
+    val activeSteps: Int,
     val resolutionLabel: String,
     val durationMs: Long
 )
@@ -325,6 +338,352 @@ class OnnxDiffusionEngine(
             resolutionLabel = "$width × $height",
             durationMs = totalMs
         )
+    }
+
+    /**
+     * Phase 5 Full Offline Image-to-Image Pipeline:
+     * 1. Auto Center-Crop Reference Photo -> vae_encoder.onnx (released immediately)
+     * 2. Final Generation Input = User Image Prompt + Saved Content Safety Prompt -> text_encoder.onnx
+     * 3. Forward Noise Injection at [strength] -> UNet Denoising (LCM or Euler)
+     * 4. Decode Latents -> vae_decoder.onnx -> Output Bitmap + Before/After source preview
+     */
+    suspend fun generateImageToImage(
+        sourceImageUri: Uri,
+        userPrompt: String,
+        finalGenerationInput: String,
+        negativePrompt: String,
+        strength: Float,
+        resolutionLabel: String,
+        inferenceMode: String,
+        samplerType: SamplerType,
+        steps: Int,
+        guidanceScale: Float,
+        seed: Long,
+        onProgress: (GenerationProgress) -> Unit
+    ): Result<ImageToImageResult> = runCatching {
+        cancelRequested.set(false)
+        val startMs = System.currentTimeMillis()
+
+        // 1. Validate prompt with reference photo safety check
+        val safetyCheck = MandatorySafetyGuard.validateRequest(
+            userPrompt = userPrompt,
+            hasRealPersonReferencePhoto = true
+        )
+        if (!safetyCheck.allowed) {
+            error(safetyCheck.messageEn ?: "Please adjust your prompt and try again.")
+        }
+
+        // 2. Verify all 4 ONNX models exist (including vae_encoder.onnx)
+        val vaeEncoderFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.VAE_ENCODER)
+            ?: error("Missing vae_encoder.onnx. Please upload all 4 ONNX models in the Models tab.")
+        val textEncoderFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.TEXT_ENCODER)
+            ?: error("Missing text_encoder.onnx. Please upload your ONNX folder in Models tab.")
+        val unetFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.UNET)
+            ?: error("Missing unet.onnx. Please upload your ONNX folder in Models tab.")
+        val vaeDecoderFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.VAE_DECODER)
+            ?: error("Missing vae_decoder.onnx. Please upload your ONNX folder in Models tab.")
+
+        val (width, height) = parseResolution(resolutionLabel)
+        val latentW = width / 8
+        val latentH = height / 8
+        val latentSize = 4 * latentH * latentW
+        val preferNnapi = inferenceMode.contains("NNAPI", ignoreCase = true)
+        val env = OrtEnvironment.getEnvironment()
+
+        val startStepIndex = DiffusionSchedulers.computeImg2ImgStartStep(steps, strength)
+        val activeSteps = (steps - startStepIndex).coerceAtLeast(1)
+
+        // 3. Auto Center-Crop Reference Photo & Save 1:1 Before Preview
+        onProgress(
+            GenerationProgress(
+                stageTitle = "Auto-Cropping & Encoding Reference Photo...",
+                currentStep = 0,
+                totalSteps = activeSteps,
+                percent = 5,
+                elapsedMs = System.currentTimeMillis() - startMs
+            )
+        )
+        checkNotCancelled()
+
+        val croppedRefBitmap = ImageBitmapPreprocessor.loadAndCenterCropFromUri(
+            context = context,
+            uri = sourceImageUri,
+            targetWidth = width,
+            targetHeight = height
+        )
+        val croppedSourceFile = ImageBitmapPreprocessor.saveReferencePreview(context, croppedRefBitmap)
+
+        // 4. Stage 0: Run VAE Encoder & immediately close session to free RAM
+        val cleanImageLatents = try {
+            createSafeSession(env, vaeEncoderFile, preferNnapi).use { vaeEncSession ->
+                runVaeEncoder(
+                    env = env,
+                    vaeEncSession = vaeEncSession,
+                    bitmap = croppedRefBitmap,
+                    latentSize = latentSize,
+                    seed = seed
+                )
+            }
+        } finally {
+            croppedRefBitmap.recycle()
+        }
+        System.gc()
+
+        // 5. Stage 1: Encode Final Generation Input (User Prompt + Saved Content Safety Prompt)
+        onProgress(
+            GenerationProgress(
+                stageTitle = "Encoding Prompt (CLIP Text Encoder)...",
+                currentStep = 0,
+                totalSteps = activeSteps,
+                percent = 14,
+                elapsedMs = System.currentTimeMillis() - startMs
+            )
+        )
+        checkNotCancelled()
+
+        val normalizedClipPrompt = OfflineTamilPromptTranslator.normalizeForClip(finalGenerationInput)
+        val posTokenIds = tokenizer.encode(normalizedClipPrompt)
+        val needClassifierFreeGuidance = samplerType == SamplerType.EULER_STANDARD && guidanceScale > 1.15f
+        val negTokenIds = if (needClassifierFreeGuidance) {
+            tokenizer.encode(negativePrompt.ifBlank { "blurry, deformed, bad anatomy, low quality" })
+        } else {
+            null
+        }
+
+        val (posEmbeddings, negEmbeddings, hiddenDim) = createSafeSession(env, textEncoderFile, preferNnapi).use { teSession ->
+            val posOut = runTextEncoder(env, teSession, posTokenIds)
+            val negOut = if (negTokenIds != null) {
+                checkNotCancelled()
+                runTextEncoder(env, teSession, negTokenIds).first
+            } else {
+                null
+            }
+            Triple(posOut.first, negOut, posOut.second)
+        }
+        System.gc()
+
+        // 6. Stage 2: Inject Strength Noise + Run UNet Denoising Loop
+        onProgress(
+            GenerationProgress(
+                stageTitle = "Loading UNet (Strength ${(strength * 100).toInt()}%)...",
+                currentStep = 0,
+                totalSteps = activeSteps,
+                percent = 22,
+                elapsedMs = System.currentTimeMillis() - startMs
+            )
+        )
+        checkNotCancelled()
+
+        val denoisedLatents = createSafeSession(env, unetFile, preferNnapi).use { unetSession ->
+            if (samplerType == SamplerType.LCM_FAST) {
+                val scheduler = DiffusionSchedulers.LcmSession(steps)
+                var latents = scheduler.addNoise(cleanImageLatents, startStepIndex, seed)
+                var executed = 0
+
+                for (stepIdx in startStepIndex until steps) {
+                    checkNotCancelled()
+                    executed++
+                    val t = scheduler.timesteps[stepIdx]
+                    val pct = 24 + ((executed.toFloat() / activeSteps.toFloat()) * 64f).toInt()
+                    onProgress(
+                        GenerationProgress(
+                            stageTitle = "Transforming (LCM Step $executed/$activeSteps)...",
+                            currentStep = executed,
+                            totalSteps = activeSteps,
+                            percent = pct,
+                            elapsedMs = System.currentTimeMillis() - startMs
+                        )
+                    )
+
+                    val noisePred = runUnetSingleBatch(
+                        env = env,
+                        unetSession = unetSession,
+                        latents = latents,
+                        latentH = latentH,
+                        latentW = latentW,
+                        timestep = t,
+                        encoderHiddenStates = posEmbeddings,
+                        hiddenDim = hiddenDim,
+                        guidanceScale = guidanceScale,
+                        imageWidth = width,
+                        imageHeight = height
+                    )
+                    latents = scheduler.step(noisePred, stepIdx, latents, seed)
+                }
+                latents
+            } else {
+                val scheduler = DiffusionSchedulers.EulerSession(steps)
+                var latents = scheduler.addNoise(cleanImageLatents, startStepIndex, seed)
+                var executed = 0
+
+                for (stepIdx in startStepIndex until steps) {
+                    checkNotCancelled()
+                    executed++
+                    val t = scheduler.timesteps[stepIdx]
+                    val pct = 24 + ((executed.toFloat() / activeSteps.toFloat()) * 64f).toInt()
+                    onProgress(
+                        GenerationProgress(
+                            stageTitle = "Transforming (Euler Step $executed/$activeSteps)...",
+                            currentStep = executed,
+                            totalSteps = activeSteps,
+                            percent = pct,
+                            elapsedMs = System.currentTimeMillis() - startMs
+                        )
+                    )
+
+                    val scaledLatents = scheduler.scaleModelInput(latents, stepIdx)
+                    val condNoise = runUnetSingleBatch(
+                        env = env,
+                        unetSession = unetSession,
+                        latents = scaledLatents,
+                        latentH = latentH,
+                        latentW = latentW,
+                        timestep = t,
+                        encoderHiddenStates = posEmbeddings,
+                        hiddenDim = hiddenDim,
+                        guidanceScale = guidanceScale,
+                        imageWidth = width,
+                        imageHeight = height
+                    )
+
+                    val finalNoise = if (negEmbeddings != null) {
+                        checkNotCancelled()
+                        val uncondNoise = runUnetSingleBatch(
+                            env = env,
+                            unetSession = unetSession,
+                            latents = scaledLatents,
+                            latentH = latentH,
+                            latentW = latentW,
+                            timestep = t,
+                            encoderHiddenStates = negEmbeddings,
+                            hiddenDim = hiddenDim,
+                            guidanceScale = guidanceScale,
+                            imageWidth = width,
+                            imageHeight = height
+                        )
+                        FloatArray(condNoise.size) { i ->
+                            uncondNoise[i] + guidanceScale * (condNoise[i] - uncondNoise[i])
+                        }
+                    } else {
+                        condNoise
+                    }
+
+                    latents = scheduler.step(finalNoise, stepIdx, latents)
+                }
+                latents
+            }
+        }
+        System.gc()
+
+        // 7. Stage 3: Decode Latents into Final Bitmap via VAE Decoder
+        onProgress(
+            GenerationProgress(
+                stageTitle = "Decoding Final Photo (VAE Decoder)...",
+                currentStep = activeSteps,
+                totalSteps = activeSteps,
+                percent = 92,
+                elapsedMs = System.currentTimeMillis() - startMs
+            )
+        )
+        checkNotCancelled()
+
+        val scaledForVae = FloatArray(denoisedLatents.size) { i ->
+            denoisedLatents[i] / 0.18215f
+        }
+
+        val bitmap = createSafeSession(env, vaeDecoderFile, preferNnapi).use { vaeSession ->
+            runVaeDecoderToBitmap(
+                env = env,
+                vaeSession = vaeSession,
+                scaledLatents = scaledForVae,
+                latentH = latentH,
+                latentW = latentW,
+                outWidth = width,
+                outHeight = height
+            )
+        }
+        System.gc()
+
+        val totalMs = System.currentTimeMillis() - startMs
+        onProgress(
+            GenerationProgress(
+                stageTitle = "Completed!",
+                currentStep = activeSteps,
+                totalSteps = activeSteps,
+                percent = 100,
+                elapsedMs = totalMs
+            )
+        )
+
+        ImageToImageResult(
+            bitmap = bitmap,
+            croppedSourceFile = croppedSourceFile,
+            finalGenerationInput = finalGenerationInput,
+            normalizedClipPrompt = normalizedClipPrompt,
+            strength = strength,
+            seed = seed,
+            activeSteps = activeSteps,
+            resolutionLabel = "$width × $height",
+            durationMs = totalMs
+        )
+    }
+
+    private fun runVaeEncoder(
+        env: OrtEnvironment,
+        vaeEncSession: OrtSession,
+        bitmap: Bitmap,
+        latentSize: Int,
+        seed: Long
+    ): FloatArray {
+        val inputName = vaeEncSession.inputNames.first()
+        val inInfo = vaeEncSession.inputInfo[inputName]?.info as? TensorInfo
+        val inType = inInfo?.type ?: OnnxJavaType.FLOAT
+        val inShape = inInfo?.shape
+        val w = bitmap.width
+        val h = bitmap.height
+
+        val isNhwc = inShape != null && inShape.size == 4 && inShape[3] == 3L
+        val normalizedRgb = ImageBitmapPreprocessor.bitmapToNormalizedFloats(bitmap, isNhwc = isNhwc)
+        val tensorShape = if (isNhwc) {
+            longArrayOf(1L, h.toLong(), w.toLong(), 3L)
+        } else {
+            longArrayOf(1L, 3L, h.toLong(), w.toLong())
+        }
+
+        val inputTensor = createFloatOrFp16Tensor(
+            env = env,
+            data = normalizedRgb,
+            shape = tensorShape,
+            targetType = inType
+        )
+
+        inputTensor.use { tensor ->
+            vaeEncSession.run(mapOf(inputName to tensor)).use { results ->
+                val outTensor = results[0] as OnnxTensor
+                val rawOut = extractFloatArray(outTensor)
+
+                return when {
+                    // Format A: Optimum / Diffusers latent_dist.sample -> [1, 4, H/8, W/8]
+                    rawOut.size == latentSize -> {
+                        FloatArray(latentSize) { i -> rawOut[i] * 0.18215f }
+                    }
+                    // Format B: DiagonalGaussianDistribution moments -> [1, 8, H/8, W/8] (4 mean + 4 logvar)
+                    rawOut.size >= latentSize * 2 -> {
+                        val rng = java.util.Random(seed + 17L)
+                        FloatArray(latentSize) { i ->
+                            val mean = rawOut[i].toDouble()
+                            val logVar = rawOut[latentSize + i].toDouble().coerceIn(-30.0, 20.0)
+                            val std = kotlin.math.exp(0.5 * logVar)
+                            val sampled = mean + std * rng.nextGaussian()
+                            (sampled * 0.18215).toFloat()
+                        }
+                    }
+                    else -> {
+                        FloatArray(latentSize) { i -> rawOut.getOrElse(i) { 0f } * 0.18215f }
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun checkNotCancelled() {

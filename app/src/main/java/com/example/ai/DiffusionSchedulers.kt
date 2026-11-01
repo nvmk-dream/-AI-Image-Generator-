@@ -46,6 +46,17 @@ object DiffusionSchedulers {
         }
     }
 
+    /**
+     * Computes starting step index in [0, totalSteps - 1] for Image-to-Image given strength in [0.15, 0.95].
+     * Higher strength -> smaller startStepIndex -> more denoising steps (stronger transformation).
+     */
+    fun computeImg2ImgStartStep(totalSteps: Int, strength: Float): Int {
+        val safeTotal = totalSteps.coerceAtLeast(1)
+        val clampedStrength = strength.coerceIn(0.15f, 0.95f)
+        val activeSteps = kotlin.math.round(safeTotal * clampedStrength).toInt().coerceIn(1, safeTotal)
+        return (safeTotal - activeSteps).coerceIn(0, safeTotal - 1)
+    }
+
     // =========================================================================
     // 1. LCM Discrete Scheduler (4–8 steps fast inference)
     // =========================================================================
@@ -61,6 +72,23 @@ object DiffusionSchedulers {
                 val pos = ((lcmOriginTimesteps.size - 1) - (idx * stepRatio).toInt())
                     .coerceIn(0, lcmOriginTimesteps.lastIndex)
                 lcmOriginTimesteps[pos]
+            }
+        }
+
+        fun addNoise(
+            originalLatents: FloatArray,
+            startStepIndex: Int,
+            seed: Long
+        ): FloatArray {
+            val idx = startStepIndex.coerceIn(0, timesteps.lastIndex)
+            val t = timesteps[idx]
+            val alphaProdT = alphasCumprod[t]
+            val sqrtAlpha = sqrt(alphaProdT)
+            val sqrtOneMinusAlpha = sqrt(1.0 - alphaProdT)
+            val rng = Random(seed + 101L)
+            return FloatArray(originalLatents.size) { i ->
+                val eps = rng.nextGaussian()
+                (sqrtAlpha * originalLatents[i].toDouble() + sqrtOneMinusAlpha * eps).toFloat()
             }
         }
 
@@ -134,6 +162,20 @@ object DiffusionSchedulers {
 
         val initNoiseSigma: Float
             get() = sigmas.firstOrNull()?.toFloat() ?: 1.0f
+
+        fun addNoise(
+            originalLatents: FloatArray,
+            startStepIndex: Int,
+            seed: Long
+        ): FloatArray {
+            val idx = startStepIndex.coerceIn(0, timesteps.lastIndex)
+            val sigma = sigmas[idx]
+            val rng = Random(seed + 101L)
+            return FloatArray(originalLatents.size) { i ->
+                val eps = rng.nextGaussian()
+                (originalLatents[i].toDouble() + sigma * eps).toFloat()
+            }
+        }
 
         fun scaleModelInput(sample: FloatArray, stepIndex: Int): FloatArray {
             val sigma = sigmas[stepIndex]

@@ -685,7 +685,7 @@ fun StudioWorkspaceScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (modelsReady) {
-                            if (isTamil) "Phase 5/6-ல் இக்கட்டமைப்பு இணையும்" else "Scheduled in Phase 5 & 6"
+                            if (isTamil) "Phase 6-ல் இக்கட்டமைப்பு இணையும்" else "Scheduled in Phase 6"
                         } else {
                             if (isTamil) "4 ONNX மாடல்களையும் ஏற்றவும் (${metrics.installedCount}/4)" else "Upload All 4 ONNX Models (${metrics.installedCount}/4)"
                         },

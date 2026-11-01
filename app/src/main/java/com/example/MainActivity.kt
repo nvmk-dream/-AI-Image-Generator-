@@ -36,6 +36,7 @@ import com.example.ui.components.GlassBottomNavBar
 import com.example.ui.screens.ContentSafetySettingsScreen
 import com.example.ui.screens.CreationsCollectionScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.ImageToImageScreen
 import com.example.ui.screens.ModelsTabScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.StudioWorkspaceScreen
@@ -239,6 +240,35 @@ fun ImageGeneratorRoot(
                                 errorMessage = uiState.generationErrorMessage,
                                 onUserPromptChange = appViewModel::updateUserImagePrompt,
                                 onGenerate = appViewModel::generateOfflineTextToImage,
+                                onCancelGeneration = appViewModel::cancelGeneration,
+                                onExportToGallery = appViewModel::exportCreationToGallery,
+                                onToggleFavorite = appViewModel::toggleFavoriteCreation,
+                                onOpenModelsTab = {
+                                    appViewModel.selectBottomTab(BottomNavTab.MODELS)
+                                },
+                                onOpenContentSafetySettings = {
+                                    appViewModel.navigateToScreen(ActiveScreen.CONTENT_SAFETY_SETTINGS)
+                                },
+                                onBack = { appViewModel.navigateBackToHome() }
+                            )
+
+                            ActiveScreen.IMAGE_TO_IMAGE -> ImageToImageScreen(
+                                preferences = uiState.preferences,
+                                metrics = uiState.metrics,
+                                selectedPhotoUri = uiState.selectedInputPhotoUri,
+                                userPrompt = uiState.userPromptInput,
+                                isGenerating = uiState.isGenerating,
+                                progress = uiState.generationProgress,
+                                latestImg2ImgCreation = uiState.latestImg2ImgCreation,
+                                latestSourcePreviewPath = uiState.latestImg2ImgSourcePath,
+                                errorMessage = uiState.generationErrorMessage,
+                                onPickReferencePhoto = {
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                onUserPromptChange = appViewModel::updateUserImagePrompt,
+                                onGenerateImg2Img = appViewModel::generateOfflineImageToImage,
                                 onCancelGeneration = appViewModel::cancelGeneration,
                                 onExportToGallery = appViewModel::exportCreationToGallery,
                                 onToggleFavorite = appViewModel::toggleFavoriteCreation,
