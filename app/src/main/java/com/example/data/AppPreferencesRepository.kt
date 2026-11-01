@@ -39,6 +39,16 @@ data class CustomContentCategories(
     val fantasyAction: Boolean = false
 )
 
+object ContentSafetyDefaults {
+    const val DEFAULT_CONTENT_SAFETY_PROMPT: String =
+        "சட்டவிரோதமான தீங்கு விளைவிக்கும் உள்ளடக்கம், குழந்தைகள் தொடர்பான பாலியல் உள்ளடக்கம் மற்றும் அனுமதியற்ற உண்மையான நபர் பாலியல் Deepfake போன்றவற்றுக்கு கட்டாய பாதுகாப்பு இருக்க வேண்டும்."
+
+    const val STRICT_TEMPLATE_PROMPT: String =
+        "சட்டவிரோதமான தீங்கு விளைவிக்கும் உள்ளடக்கம், குழந்தைகள் தொடர்பான பாலியல் உள்ளடக்கம் மற்றும் அனுமதியற்ற உண்மையான நபர் பாலியல் Deepfake போன்றவற்றுக்கு கட்டாய பாதுகாப்பு இருக்க வேண்டும். family friendly, modest classic attire, clean wholesome portrait"
+
+    const val BALANCED_TEMPLATE_PROMPT: String = DEFAULT_CONTENT_SAFETY_PROMPT
+}
+
 data class AppPreferencesState(
     val resolution: String = "512 × 512",
     val inferenceMode: String = "CPU (Auto)",
@@ -48,45 +58,20 @@ data class AppPreferencesState(
     val notificationsEnabled: Boolean = true,
     val contentFilterEnabled: Boolean = true,
     val safetyMode: ContentSafetyMode = ContentSafetyMode.BALANCED,
-    val customCategories: CustomContentCategories = CustomContentCategories()
+    val customCategories: CustomContentCategories = CustomContentCategories(),
+    val savedContentSafetyPrompt: String = ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT,
+    val savedUserImagePrompt: String = ""
 ) {
     val isTamil: Boolean
         get() = language == AppLanguage.TAMIL
 
-    fun activeFilterSummary(): String {
-        if (!contentFilterEnabled) {
-            return if (isTamil) {
-                "விருப்ப ஃபில்டர்: OFF • முழு சுதந்திர கலை உருவாக்கம்"
-            } else {
-                "Content Filter: OFF • Open Creative Studio"
-            }
-        }
-        return when (safetyMode) {
-            ContentSafetyMode.STRICT -> if (isTamil) {
-                "Strict Mode: பொதுவான உருவப்படங்கள், இயற்கை & பாரம்பரிய உடைகள்"
-            } else {
-                "Strict Mode: General portraits, nature & classic outfits"
-            }
-            ContentSafetyMode.BALANCED -> if (isTamil) {
-                "Balanced Mode: கலை, Fashion, Glamour & நாகரிகமான கலைப்படங்கள்"
-            } else {
-                "Balanced Mode: Art, Fashion, Glamour & tasteful creative portraits"
-            }
-            ContentSafetyMode.CUSTOM -> {
-                val enabledList = buildList {
-                    if (customCategories.fashionGlamour) add(if (isTamil) "Fashion & Glamour" else "Fashion & Glamour")
-                    if (customCategories.swimwearBeach) add(if (isTamil) "Beachwear" else "Beachwear")
-                    if (customCategories.romanticPoses) add(if (isTamil) "Romantic" else "Romantic")
-                    if (customCategories.classicalArtistic) add(if (isTamil) "Fine Art" else "Fine Art")
-                    if (customCategories.fantasyAction) add(if (isTamil) "Action" else "Action")
-                }
-                if (enabledList.isEmpty()) {
-                    if (isTamil) "Custom Mode: பொதுவான படங்கள் மட்டும்" else "Custom Mode: Standard portraits only"
-                } else {
-                    val prefix = if (isTamil) "Custom அனுமதி: " else "Custom Allowed: "
-                    prefix + enabledList.joinToString(", ")
-                }
-            }
+    fun buildFinalGenerationInput(currentUserPrompt: String): String {
+        val cleanUser = currentUserPrompt.trim()
+        val cleanSafety = savedContentSafetyPrompt.trim()
+        return when {
+            !contentFilterEnabled || cleanSafety.isEmpty() -> cleanUser
+            cleanUser.isEmpty() -> cleanSafety
+            else -> "$cleanUser, $cleanSafety"
         }
     }
 }
@@ -107,6 +92,10 @@ class AppPreferencesRepository(private val context: Context) {
         val CAT_ROMANTIC_POSES = booleanPreferencesKey("cat_romantic_poses")
         val CAT_CLASSICAL_ART = booleanPreferencesKey("cat_classical_art")
         val CAT_FANTASY_ACTION = booleanPreferencesKey("cat_fantasy_action")
+
+        // Strictly separate keys so User Prompt and Content Safety Prompt never overwrite each other
+        val SAVED_CONTENT_SAFETY_PROMPT = stringPreferencesKey("saved_content_safety_prompt")
+        val SAVED_USER_IMAGE_PROMPT = stringPreferencesKey("saved_user_image_prompt")
     }
 
     val preferencesFlow: Flow<AppPreferencesState> = context.appDataStore.data.map { prefs ->
@@ -125,7 +114,10 @@ class AppPreferencesRepository(private val context: Context) {
                 romanticPoses = prefs[Keys.CAT_ROMANTIC_POSES] ?: true,
                 classicalArtistic = prefs[Keys.CAT_CLASSICAL_ART] ?: true,
                 fantasyAction = prefs[Keys.CAT_FANTASY_ACTION] ?: false
-            )
+            ),
+            savedContentSafetyPrompt = prefs[Keys.SAVED_CONTENT_SAFETY_PROMPT]
+                ?: ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT,
+            savedUserImagePrompt = prefs[Keys.SAVED_USER_IMAGE_PROMPT] ?: ""
         )
     }
 
@@ -159,6 +151,24 @@ class AppPreferencesRepository(private val context: Context) {
 
     suspend fun setSafetyMode(mode: ContentSafetyMode) {
         context.appDataStore.edit { it[Keys.SAFETY_MODE] = mode.key }
+    }
+
+    suspend fun saveContentSafetyPrompt(prompt: String) {
+        context.appDataStore.edit { prefs ->
+            prefs[Keys.SAVED_CONTENT_SAFETY_PROMPT] = prompt.trim()
+        }
+    }
+
+    suspend fun resetContentSafetyPrompt() {
+        context.appDataStore.edit { prefs ->
+            prefs[Keys.SAVED_CONTENT_SAFETY_PROMPT] = ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT
+        }
+    }
+
+    suspend fun saveUserImagePrompt(userPrompt: String) {
+        context.appDataStore.edit { prefs ->
+            prefs[Keys.SAVED_USER_IMAGE_PROMPT] = userPrompt
+        }
     }
 
     suspend fun updateCustomCategory(

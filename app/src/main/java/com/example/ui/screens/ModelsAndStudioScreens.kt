@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,14 +28,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.FolderSpecial
-import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,12 +57,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.ai.DiffusionModelSlot
 import com.example.ai.OnnxModelManager
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.data.AppPreferencesState
+import com.example.data.GeneratedCreation
 import com.example.ui.ActiveScreen
 import com.example.ui.components.CircularGlowIconButton
 import com.example.ui.components.FrostedGlassCard
@@ -70,6 +76,7 @@ import com.example.ui.theme.PurpleActionEnd
 import com.example.ui.theme.PurpleActionStart
 import com.example.ui.theme.SoftAmberStatus
 import com.example.ui.theme.VibrantPinkPill
+import java.io.File
 
 @Composable
 fun ModelsTabScreen(
@@ -77,7 +84,9 @@ fun ModelsTabScreen(
     metrics: RealDeviceAndModelMetrics,
     isImporting: Boolean,
     importProgressText: String?,
+    verificationReport: String?,
     onOneTouchFolderUpload: () -> Unit,
+    onVerifyPipeline: () -> Unit,
     onSingleSlotUpload: (DiffusionModelSlot) -> Unit,
     onDeleteSlot: (DiffusionModelSlot) -> Unit,
     modifier: Modifier = Modifier
@@ -108,7 +117,7 @@ fun ModelsTabScreen(
                 style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold)
             )
 
-            // One-Touch Folder Upload Hero Glass Card (matching face-swap convenience)
+            // One-Touch Folder Upload + Phase 3 ONNX Verification Card
             FrostedGlassCard(darkTheme = darkTheme) {
                 Text(
                     text = if (isTamil) {
@@ -172,6 +181,53 @@ fun ModelsTabScreen(
                         color = Color.White,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                     )
+                }
+
+                if (metrics.installedCount > 0) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .minimumInteractiveComponentSize()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Brush.horizontalGradient(listOf(PurpleActionStart, PurpleActionEnd)))
+                            .border(1.dp, Color.White.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+                            .clickable(enabled = !isImporting, onClick = onVerifyPipeline)
+                            .padding(vertical = 10.dp)
+                            .testTag("verify_onnx_pipeline_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Bolt,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (isTamil) "ONNX மாடல்களைச் சரிபார் (Verify)" else "Verify ONNX Runtime Sessions",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                }
+
+                if (!verificationReport.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White.copy(alpha = if (darkTheme) 0.08f else 0.58f))
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = verificationReport,
+                            color = textColor,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -256,75 +312,205 @@ fun ModelsTabScreen(
 }
 
 @Composable
-fun EmptyCollectionTabScreen(
+fun CreationsCollectionScreen(
     title: String,
-    subtitle: String,
-    isFavorites: Boolean,
+    emptySubtitle: String,
+    creations: List<GeneratedCreation>,
+    isFavoritesView: Boolean,
     darkTheme: Boolean,
+    showBackButton: Boolean = false,
+    onBack: () -> Unit = {},
     onStartCreating: () -> Unit,
+    onToggleFavorite: (String) -> Unit,
+    onSaveToGallery: (GeneratedCreation) -> Unit,
+    onDeleteCreation: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    if (showBackButton) {
+        BackHandler { onBack() }
+    }
+
     val textColor = if (darkTheme) Color.White else DeepPlumText
     val subColor = if (darkTheme) Color(0xFFE1C9F7) else Color(0xFF4F376E)
 
-    Box(
-        contentAlignment = Alignment.Center,
+    if (creations.isEmpty()) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(20.dp)
+        ) {
+            FrostedGlassCard(
+                darkTheme = darkTheme,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 500.dp)
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 18.dp, horizontal = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isFavoritesView) Icons.Filled.StarBorder else Icons.Filled.FavoriteBorder,
+                        contentDescription = null,
+                        tint = VibrantPinkPill,
+                        modifier = Modifier.size(52.dp)
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = title,
+                        color = textColor,
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = emptySubtitle,
+                        color = subColor,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .clip(RoundedCornerShape(50))
+                            .background(Brush.horizontalGradient(listOf(PinkGlowStart, PinkGlowEnd)))
+                            .border(1.dp, Color.White, RoundedCornerShape(50))
+                            .clickable(onClick = onStartCreating)
+                            .padding(horizontal = 22.dp, vertical = 10.dp)
+                            .testTag("empty_collection_create_button")
+                    ) {
+                        Text(
+                            text = "Create Image",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(20.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp)
     ) {
-        FrostedGlassCard(
-            darkTheme = darkTheme,
+        Column(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 500.dp)
+                .widthIn(max = 600.dp)
+                .padding(vertical = 10.dp)
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 18.dp, horizontal = 8.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(
-                    imageVector = if (isFavorites) Icons.Filled.StarBorder else Icons.Filled.FavoriteBorder,
-                    contentDescription = null,
-                    tint = VibrantPinkPill,
-                    modifier = Modifier.size(52.dp)
-                )
-                Spacer(modifier = Modifier.height(10.dp))
+                if (showBackButton) {
+                    CircularGlowIconButton(
+                        onClick = onBack,
+                        contentDescription = "Back",
+                        testTag = "gallery_back_button"
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
                 Text(
-                    text = title,
+                    text = "$title (${creations.size})",
                     color = textColor,
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    textAlign = TextAlign.Center
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold)
                 )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = subtitle,
-                    color = subColor,
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(50))
-                        .background(Brush.horizontalGradient(listOf(PinkGlowStart, PinkGlowEnd)))
-                        .border(1.dp, Color.White, RoundedCornerShape(50))
-                        .clickable(onClick = onStartCreating)
-                        .padding(horizontal = 22.dp, vertical = 10.dp)
-                        .testTag("empty_collection_create_button")
-                ) {
-                    Text(
-                        text = "Create Image",
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+            }
+
+            creations.forEach { item ->
+                FrostedGlassCard(darkTheme = darkTheme) {
+                    AsyncImage(
+                        model = File(item.filePath),
+                        contentDescription = item.userPrompt,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(16.dp))
+                            .border(1.2.dp, Color.White, RoundedCornerShape(16.dp))
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = item.userPrompt.ifBlank { "Generated Image" },
+                        color = textColor,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "${item.resolution} • ${item.steps} steps • Seed ${item.seed}",
+                        color = subColor,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .minimumInteractiveComponentSize()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Brush.horizontalGradient(listOf(PurpleActionStart, PurpleActionEnd)))
+                                .clickable { onSaveToGallery(item) }
+                                .padding(vertical = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Download,
+                                contentDescription = "Save to Gallery",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Gallery",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+
+                        IconButton(onClick = { onToggleFavorite(item.id) }) {
+                            Icon(
+                                imageVector = if (item.isFavorite) Icons.Filled.Star else Icons.Outlined.StarOutline,
+                                contentDescription = "Toggle Favorite",
+                                tint = VibrantPinkPill
+                            )
+                        }
+
+                        IconButton(onClick = { onDeleteCreation(item.id) }) {
+                            Icon(
+                                imageVector = Icons.Filled.DeleteOutline,
+                                contentDescription = "Delete",
+                                tint = Color(0xFFE53935)
+                            )
+                        }
+                    }
                 }
             }
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
@@ -350,21 +536,12 @@ fun StudioWorkspaceScreen(
     val subColor = if (darkTheme) Color(0xFFE1C9F7) else Color(0xFF4F376E)
 
     val title = when (screen) {
-        ActiveScreen.TEXT_TO_IMAGE -> "Text to Image"
         ActiveScreen.IMAGE_TO_IMAGE -> "Image to Image"
         ActiveScreen.CHARACTER_STUDIO -> "Character Studio"
         ActiveScreen.FACE_SWAP -> "Face Swap"
         ActiveScreen.IMAGE_EDITOR -> "Image Editor"
-        ActiveScreen.MY_GALLERY -> "My Gallery"
         else -> "Studio"
     }
-
-    val needsInputPhoto = screen in setOf(
-        ActiveScreen.IMAGE_TO_IMAGE,
-        ActiveScreen.CHARACTER_STUDIO,
-        ActiveScreen.FACE_SWAP,
-        ActiveScreen.IMAGE_EDITOR
-    )
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -411,141 +588,110 @@ fun StudioWorkspaceScreen(
                 }
             }
 
-            if (screen == ActiveScreen.MY_GALLERY) {
-                FrostedGlassCard(darkTheme = darkTheme) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
+            FrostedGlassCard(darkTheme = darkTheme) {
+                Text(
+                    text = if (isTamil) "Reference புகைப்படம்" else "Reference Photo",
+                    color = textColor,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                if (selectedPhotoUri != null) {
+                    AsyncImage(
+                        model = selectedPhotoUri,
+                        contentDescription = "Selected photo",
+                        contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 22.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.PhotoLibrary,
-                            contentDescription = null,
-                            tint = PurpleActionEnd,
-                            modifier = Modifier.size(48.dp)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = if (isTamil) {
-                                "நீங்கள் உருவாக்கும் படங்கள் இங்கே சேமிக்கப்படும்"
-                            } else {
-                                "Your offline generated photos will appear here"
-                            },
-                            color = textColor,
-                            style = MaterialTheme.typography.titleMedium,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                }
-            } else {
-                if (needsInputPhoto) {
-                    FrostedGlassCard(darkTheme = darkTheme) {
-                        Text(
-                            text = if (isTamil) "Reference புகைப்படம்" else "Reference Photo",
-                            color = textColor,
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        if (selectedPhotoUri != null) {
-                            AsyncImage(
-                                model = selectedPhotoUri,
-                                contentDescription = "Selected photo",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(190.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .minimumInteractiveComponentSize()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Brush.horizontalGradient(listOf(PurpleActionStart, PurpleActionEnd)))
-                                .clickable(onClick = onPickPhoto)
-                                .padding(vertical = 11.dp)
-                                .testTag("pick_reference_photo_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.AddPhotoAlternate,
-                                contentDescription = null,
-                                tint = Color.White
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (isTamil) "படம் தேர்வு செய்க" else "Choose Photo from Gallery",
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                            )
-                        }
-                    }
-                }
-
-                FrostedGlassCard(darkTheme = darkTheme) {
-                    Text(
-                        text = if (isTamil) "Prompt (தமிழ் / English)" else "Creative Prompt (Tamil / English)",
-                        color = textColor,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            .height(190.dp)
+                            .clip(RoundedCornerShape(16.dp))
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = promptDraft,
-                        onValueChange = onPromptChange,
-                        placeholder = {
-                            Text(
-                                if (isTamil) {
-                                    "உதாரணம்: அழகான பட்டுப்புடவை அணிந்த பெண், இயற்கை ஒளி..."
-                                } else {
-                                    "e.g., Cinematic portrait in silk saree, soft studio bokeh lighting..."
-                                }
-                            )
-                        },
-                        minLines = 3,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("prompt_input_field")
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .minimumInteractiveComponentSize()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Brush.horizontalGradient(listOf(PurpleActionStart, PurpleActionEnd)))
+                        .clickable(onClick = onPickPhoto)
+                        .padding(vertical = 11.dp)
+                        .testTag("pick_reference_photo_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.AddPhotoAlternate,
+                        contentDescription = null,
+                        tint = Color.White
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isTamil) "படம் தேர்வு செய்க" else "Choose Photo from Gallery",
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            }
 
-                    val modelsReady = metrics.isTxt2ImgReady
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .minimumInteractiveComponentSize()
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Brush.horizontalGradient(listOf(PinkGlowStart, PinkGlowEnd)))
-                            .border(1.2.dp, Color.White, RoundedCornerShape(20.dp))
-                            .clickable {
-                                if (!modelsReady) {
-                                    onOpenModelsTab()
-                                }
-                            }
-                            .padding(vertical = 13.dp, horizontal = 14.dp)
-                            .testTag("workspace_primary_action_button")
-                    ) {
-                        Icon(
-                            imageVector = if (modelsReady) Icons.Filled.AutoAwesome else Icons.Filled.FolderSpecial,
-                            contentDescription = null,
-                            tint = Color.White
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
+            FrostedGlassCard(darkTheme = darkTheme) {
+                Text(
+                    text = if (isTamil) "Prompt (தமிழ் / English)" else "Creative Prompt (Tamil / English)",
+                    color = textColor,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = promptDraft,
+                    onValueChange = onPromptChange,
+                    placeholder = {
                         Text(
-                            text = if (modelsReady) {
-                                if (isTamil) "Offline ONNX தயார் (Phase 3/4 Pipeline)" else "ONNX Ready • Next Phase Inference"
+                            if (isTamil) {
+                                "உதாரணம்: அழகான பட்டுப்புடவை அணிந்த பெண், இயற்கை ஒளி..."
                             } else {
-                                if (isTamil) "முதலில் ONNX Folder ஏற்றவும் (${metrics.installedCount}/4)" else "Upload ONNX Folder First (${metrics.installedCount}/4)"
-                            },
-                            color = Color.White,
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                "e.g., Cinematic portrait in silk saree, soft studio bokeh lighting..."
+                            }
                         )
-                    }
+                    },
+                    minLines = 3,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("prompt_input_field")
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                val modelsReady = metrics.isAllFourReady
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .minimumInteractiveComponentSize()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Brush.horizontalGradient(listOf(PinkGlowStart, PinkGlowEnd)))
+                        .border(1.2.dp, Color.White, RoundedCornerShape(20.dp))
+                        .clickable {
+                            if (!modelsReady) {
+                                onOpenModelsTab()
+                            }
+                        }
+                        .padding(vertical = 13.dp, horizontal = 14.dp)
+                        .testTag("workspace_primary_action_button")
+                ) {
+                    Icon(
+                        imageVector = if (modelsReady) Icons.Filled.AutoAwesome else Icons.Filled.FolderSpecial,
+                        contentDescription = null,
+                        tint = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (modelsReady) {
+                            if (isTamil) "Phase 5/6-ல் இக்கட்டமைப்பு இணையும்" else "Scheduled in Phase 5 & 6"
+                        } else {
+                            if (isTamil) "4 ONNX மாடல்களையும் ஏற்றவும் (${metrics.installedCount}/4)" else "Upload All 4 ONNX Models (${metrics.installedCount}/4)"
+                        },
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
                 }
             }
         }

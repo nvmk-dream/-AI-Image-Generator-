@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -36,6 +35,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
@@ -51,8 +51,6 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -78,6 +76,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
@@ -85,14 +84,12 @@ import com.example.ai.OnnxModelManager
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.data.AppLanguage
 import com.example.data.AppPreferencesState
-import com.example.data.ContentSafetyMode
 import com.example.ui.components.CircularGlowIconButton
 import com.example.ui.components.FrostedGlassCard
 import com.example.ui.components.PaletteAppLogo
 import com.example.ui.theme.CyanVersionAccent
 import com.example.ui.theme.DeepPlumText
 import com.example.ui.theme.NeonReadyGreen
-import com.example.ui.theme.PinkGlowEnd
 import com.example.ui.theme.PinkGlowStart
 import com.example.ui.theme.PurpleActionEnd
 import com.example.ui.theme.PurpleActionStart
@@ -105,6 +102,7 @@ fun SettingsScreen(
     metrics: RealDeviceAndModelMetrics,
     onBack: () -> Unit,
     onOpenModelsManager: () -> Unit,
+    onOpenContentSafetyPage: () -> Unit,
     onResolutionChange: (String) -> Unit,
     onInferenceModeChange: (String) -> Unit,
     onOfflineModeChange: (Boolean) -> Unit,
@@ -112,14 +110,6 @@ fun SettingsScreen(
     onDarkThemeChange: (Boolean) -> Unit,
     onNotificationsChange: (Boolean) -> Unit,
     onContentFilterToggle: (Boolean) -> Unit,
-    onSafetyModeChange: (ContentSafetyMode) -> Unit,
-    onCustomCategoryChange: (
-        fashionGlamour: Boolean?,
-        swimwearBeach: Boolean?,
-        romanticPoses: Boolean?,
-        classicalArtistic: Boolean?,
-        fantasyAction: Boolean?
-    ) -> Unit,
     onClearCache: () -> Unit,
     onUnloadRam: () -> Unit,
     modifier: Modifier = Modifier
@@ -221,11 +211,7 @@ fun SettingsScreen(
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = if (isTamil) {
-                                    "Offline AI • Create • Edit • Enjoy"
-                                } else {
-                                    "Create • Edit • Enjoy"
-                                },
+                                text = "Create • Edit • Enjoy",
                                 color = secondaryTextColor,
                                 style = MaterialTheme.typography.bodyMedium
                             )
@@ -246,18 +232,17 @@ fun SettingsScreen(
                 SectionHeaderRow(
                     icon = Icons.Filled.Memory,
                     iconTint = PurpleActionEnd,
-                    title = if (isTamil) "AI Model Settings" else "AI Model Settings",
+                    title = "AI Model Settings",
                     textColor = primaryTextColor
                 )
 
                 SettingsDivider(darkTheme)
 
-                // Real Model Status
                 val isReady = metrics.ortRuntimeAvailable && metrics.isTxt2ImgReady
                 SettingsRowItem(
                     icon = Icons.Filled.CheckCircle,
                     iconTint = if (isReady) NeonReadyGreen else SoftAmberStatus,
-                    label = if (isTamil) "Model Status" else "Model Status",
+                    label = "Model Status",
                     textColor = primaryTextColor
                 ) {
                     Row(
@@ -276,11 +261,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(5.dp))
                         Text(
-                            text = if (isReady) {
-                                "Ready (ONNX)"
-                            } else {
-                                "${metrics.installedCount}/4 Models (Tap)"
-                            },
+                            text = if (isReady) "Ready (ONNX)" else "${metrics.installedCount}/4 Models (Tap)",
                             color = primaryTextColor,
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                         )
@@ -289,11 +270,10 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                // Real Model Size
                 SettingsRowItem(
                     icon = Icons.Filled.Storage,
                     iconTint = Color(0xFF2196F3),
-                    label = if (isTamil) "Model Size" else "Model Size",
+                    label = "Model Size",
                     textColor = primaryTextColor
                 ) {
                     Text(
@@ -305,11 +285,10 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                // Resolution Dropdown
                 SettingsDropdownRow(
                     icon = Icons.Filled.PhotoSizeSelectLarge,
                     iconTint = Color(0xFF3F51B5),
-                    label = if (isTamil) "Resolution" else "Resolution",
+                    label = "Resolution",
                     selectedValue = preferences.resolution,
                     options = listOf("512 × 512", "640 × 640", "768 × 768"),
                     textColor = primaryTextColor,
@@ -320,11 +299,10 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                // Inference Mode Dropdown
                 SettingsDropdownRow(
                     icon = Icons.Filled.Bolt,
                     iconTint = Color(0xFFFF9800),
-                    label = if (isTamil) "Inference Mode" else "Inference Mode",
+                    label = "Inference Mode",
                     selectedValue = preferences.inferenceMode,
                     options = listOf("CPU (Auto)", "NNAPI", "Sequential Low-RAM"),
                     textColor = primaryTextColor,
@@ -335,11 +313,10 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                // Offline Mode Switch
                 SettingsRowItem(
                     icon = Icons.Filled.WifiOff,
                     iconTint = Color(0xFFE91E63),
-                    label = if (isTamil) "Offline Mode" else "Offline Mode",
+                    label = "Offline Mode",
                     textColor = primaryTextColor
                 ) {
                     GreenGlassSwitch(
@@ -350,12 +327,12 @@ fun SettingsScreen(
                 }
             }
 
-            // 2. Content Safety Settings Card (User-configurable 3 modes, local & offline)
+            // 2. Content Safety Settings Card -> Opens Dedicated Content Safety Settings Page!
             FrostedGlassCard(darkTheme = darkTheme) {
                 SectionHeaderRow(
                     icon = Icons.Filled.Tune,
                     iconTint = VibrantPinkPill,
-                    title = if (isTamil) "Content Safety Settings" else "Content Safety Settings",
+                    title = "Content Safety Settings",
                     textColor = primaryTextColor
                 )
 
@@ -364,7 +341,7 @@ fun SettingsScreen(
                 SettingsRowItem(
                     icon = Icons.Filled.Security,
                     iconTint = PurpleActionEnd,
-                    label = if (isTamil) "Content Filter" else "Content Filter",
+                    label = if (isTamil) "Apply Safety Prompt" else "Content Safety Prompt",
                     textColor = primaryTextColor
                 ) {
                     GreenGlassSwitch(
@@ -374,140 +351,68 @@ fun SettingsScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                SettingsDivider(darkTheme)
 
-                // 3-Mode Selector Pills: Strict | Balanced | Custom
+                // Dedicated Page Entry Row (Edit / Save / Reset Safety Prompt)
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    val modes = listOf(
-                        ContentSafetyMode.STRICT to (if (isTamil) "Strict" else "Strict"),
-                        ContentSafetyMode.BALANCED to (if (isTamil) "Balanced" else "Balanced"),
-                        ContentSafetyMode.CUSTOM to (if (isTamil) "Custom" else "Custom")
-                    )
-                    modes.forEach { (mode, modeTitle) ->
-                        val isSelected = preferences.safetyMode == mode
-                        val shape = RoundedCornerShape(16.dp)
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .weight(1f)
-                                .minimumInteractiveComponentSize()
-                                .clip(shape)
-                                .background(
-                                    if (isSelected) {
-                                        Brush.horizontalGradient(listOf(PinkGlowStart, PinkGlowEnd))
-                                    } else {
-                                        Brush.horizontalGradient(
-                                            listOf(
-                                                Color.White.copy(alpha = if (darkTheme) 0.12f else 0.55f),
-                                                Color.White.copy(alpha = if (darkTheme) 0.08f else 0.45f)
-                                            )
-                                        )
-                                    }
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = if (isSelected) Color.White else Color.White.copy(alpha = 0.5f),
-                                    shape = shape
-                                )
-                                .clickable { onSafetyModeChange(mode) }
-                                .padding(vertical = 9.dp, horizontal = 6.dp)
-                                .testTag("safety_mode_${mode.key}")
-                        ) {
-                            Text(
-                                text = modeTitle,
-                                color = if (isSelected) Color.White else primaryTextColor,
-                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Active Mode Description Box
-                Box(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
+                        .minimumInteractiveComponentSize()
+                        .clip(RoundedCornerShape(14.dp))
                         .background(
-                            if (darkTheme) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.52f)
+                            if (darkTheme) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.55f)
                         )
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .clickable(onClick = onOpenContentSafetyPage)
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .testTag("open_content_safety_page_row")
                 ) {
-                    Text(
-                        text = preferences.activeFilterSummary(),
-                        color = secondaryTextColor,
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium)
+                    Icon(
+                        imageVector = Icons.Filled.EditNote,
+                        contentDescription = null,
+                        tint = VibrantPinkPill,
+                        modifier = Modifier.size(24.dp)
                     )
-                }
-
-                // Custom Mode Individual Category Switches
-                if (preferences.safetyMode == ContentSafetyMode.CUSTOM) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    CustomCategoryCheckRow(
-                        label = if (isTamil) "Fashion & Glamour உடைகள்" else "Fashion & Glamour Outfits",
-                        checked = preferences.customCategories.fashionGlamour,
-                        textColor = primaryTextColor,
-                        testTag = "custom_cat_fashion",
-                        onCheckedChange = {
-                            onCustomCategoryChange(it, null, null, null, null)
-                        }
-                    )
-                    CustomCategoryCheckRow(
-                        label = if (isTamil) "Swimwear / கடற்கரை Fashion" else "Swimwear & Beach Fashion",
-                        checked = preferences.customCategories.swimwearBeach,
-                        textColor = primaryTextColor,
-                        testTag = "custom_cat_swimwear",
-                        onCheckedChange = {
-                            onCustomCategoryChange(null, it, null, null, null)
-                        }
-                    )
-                    CustomCategoryCheckRow(
-                        label = if (isTamil) "Romantic & Couple போஸ்கள்" else "Romantic & Couple Poses",
-                        checked = preferences.customCategories.romanticPoses,
-                        textColor = primaryTextColor,
-                        testTag = "custom_cat_romantic",
-                        onCheckedChange = {
-                            onCustomCategoryChange(null, null, it, null, null)
-                        }
-                    )
-                    CustomCategoryCheckRow(
-                        label = if (isTamil) "Classical / கலைநய ஓவியப் பாணி" else "Classical & Artistic Style",
-                        checked = preferences.customCategories.classicalArtistic,
-                        textColor = primaryTextColor,
-                        testTag = "custom_cat_artistic",
-                        onCheckedChange = {
-                            onCustomCategoryChange(null, null, null, it, null)
-                        }
-                    )
-                    CustomCategoryCheckRow(
-                        label = if (isTamil) "Fantasy Action காட்சிகள்" else "Fantasy Action Scenes",
-                        checked = preferences.customCategories.fantasyAction,
-                        textColor = primaryTextColor,
-                        testTag = "custom_cat_action",
-                        onCheckedChange = {
-                            onCustomCategoryChange(null, null, null, null, it)
-                        }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isTamil) {
+                                "Safety Prompt Editor (Edit / Save / Reset)"
+                            } else {
+                                "Edit Content Safety Prompt"
+                            },
+                            color = primaryTextColor,
+                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = preferences.savedContentSafetyPrompt,
+                            color = secondaryTextColor,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = "Open Content Safety Settings Page",
+                        tint = primaryTextColor
                     )
                 }
             }
 
-            // 3. Storage & Cache Card (Real Device Metrics)
+            // 3. Storage & Cache Card
             FrostedGlassCard(darkTheme = darkTheme) {
                 SectionHeaderRow(
                     icon = Icons.Filled.Storage,
                     iconTint = Color(0xFF1976D2),
-                    title = if (isTamil) "Storage & Cache" else "Storage & Cache",
+                    title = "Storage & Cache",
                     textColor = primaryTextColor
                 )
 
                 SettingsDivider(darkTheme)
 
-                // Model Storage Progress Row (real model bytes + real free storage)
-                val targetPipelineBytes = 2L * 1024L * 1024L * 1024L // 2.0 GB reference bar
+                val targetPipelineBytes = 2L * 1024L * 1024L * 1024L
                 val progress = (metrics.totalModelBytes.toFloat() / targetPipelineBytes.toFloat())
                     .coerceIn(0f, 1f)
 
@@ -517,7 +422,7 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = if (isTamil) "Model Storage" else "Model Storage",
+                            text = "Model Storage",
                             color = primaryTextColor,
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.weight(1f)
@@ -542,7 +447,6 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                // Model Download / Upload / Delete Management Row
                 SettingsRowItem(
                     icon = Icons.Filled.FolderOpen,
                     iconTint = PurpleActionEnd,
@@ -550,7 +454,7 @@ fun SettingsScreen(
                     textColor = primaryTextColor
                 ) {
                     PinkActionPillButton(
-                        text = if (isTamil) "Manage" else "Manage",
+                        text = "Manage",
                         testTag = "manage_models_button",
                         onClick = onOpenModelsManager
                     )
@@ -558,15 +462,14 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                // Clear Cache Row
                 SettingsRowItem(
                     icon = Icons.Filled.DeleteSweep,
                     iconTint = Color(0xFFE53935),
-                    label = "${if (isTamil) "Clear Cache" else "Clear Cache"} (${OnnxModelManager.formatBytes(metrics.cacheBytes)})",
+                    label = "Clear Cache (${OnnxModelManager.formatBytes(metrics.cacheBytes)})",
                     textColor = primaryTextColor
                 ) {
                     PinkActionPillButton(
-                        text = if (isTamil) "Clear" else "Clear",
+                        text = "Clear",
                         testTag = "clear_cache_button",
                         onClick = onClearCache
                     )
@@ -578,13 +481,12 @@ fun SettingsScreen(
                 SectionHeaderRow(
                     icon = Icons.Filled.Language,
                     iconTint = Color(0xFF0288D1),
-                    title = if (isTamil) "App Preferences" else "App Preferences",
+                    title = "App Preferences",
                     textColor = primaryTextColor
                 )
 
                 SettingsDivider(darkTheme)
 
-                // Language Dropdown (English / தமிழ்)
                 SettingsDropdownRow(
                     icon = Icons.Filled.Language,
                     iconTint = PurpleActionEnd,
@@ -603,11 +505,10 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                // Theme Segmented Toggle (Light | Dark)
                 SettingsRowItem(
                     icon = Icons.Filled.Palette,
                     iconTint = Color(0xFF5E35B1),
-                    label = if (isTamil) "Theme" else "Theme",
+                    label = "Theme",
                     textColor = primaryTextColor
                 ) {
                     Row(
@@ -636,11 +537,10 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                // Notifications Toggle
                 SettingsRowItem(
                     icon = Icons.Filled.Notifications,
                     iconTint = Color(0xFFFFA000),
-                    label = if (isTamil) "Notifications" else "Notifications",
+                    label = "Notifications",
                     textColor = primaryTextColor
                 ) {
                     GreenGlassSwitch(
@@ -662,7 +562,7 @@ fun SettingsScreen(
                 SectionHeaderRow(
                     icon = Icons.Filled.Info,
                     iconTint = Color(0xFF1976D2),
-                    title = if (isTamil) "About & Help" else "About & Help",
+                    title = "About & Help",
                     textColor = primaryTextColor
                 )
 
@@ -671,7 +571,7 @@ fun SettingsScreen(
                 SettingsRowItem(
                     icon = Icons.Filled.Info,
                     iconTint = Color(0xFF3949AB),
-                    label = if (isTamil) "App Version" else "App Version",
+                    label = "App Version",
                     textColor = primaryTextColor
                 ) {
                     Text(
@@ -683,7 +583,6 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                // Help & Support Row
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -715,7 +614,6 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                // Privacy Policy Row
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -733,7 +631,7 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = if (isTamil) "Privacy Policy" else "Privacy Policy",
+                        text = "Privacy Policy",
                         color = primaryTextColor,
                         style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.weight(1f)
@@ -746,7 +644,7 @@ fun SettingsScreen(
                 }
             }
 
-            // Bottom Action Pill: Unload AI from RAM (replaces sample Logout button with useful offline action)
+            // Bottom Action Pill: Unload AI from RAM
             val bottomBtnShape = RoundedCornerShape(28.dp)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -788,9 +686,7 @@ fun SettingsScreen(
     if (showHelpDialog) {
         AlertDialog(
             onDismissRequest = { showHelpDialog = false },
-            title = {
-                Text(if (isTamil) "One-Touch ONNX மாடல் உதவி" else "Offline ONNX Setup Guide")
-            },
+            title = { Text(if (isTamil) "One-Touch ONNX மாடல் உதவி" else "Offline ONNX Setup Guide") },
             text = {
                 Text(
                     if (isTamil) {
@@ -811,9 +707,7 @@ fun SettingsScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { showHelpDialog = false }) {
-                    Text("OK")
-                }
+                TextButton(onClick = { showHelpDialog = false }) { Text("OK") }
             }
         )
     }
@@ -832,9 +726,7 @@ fun SettingsScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { showPrivacyDialog = false }) {
-                    Text("OK")
-                }
+                TextButton(onClick = { showPrivacyDialog = false }) { Text("OK") }
             }
         )
     }
@@ -1047,46 +939,8 @@ private fun ThemeSegmentChip(
     ) {
         Text(
             text = label,
-            color = if (selected) {
-                Color.White
-            } else if (darkTheme) {
-                Color.White.copy(alpha = 0.8f)
-            } else {
-                DeepPlumText
-            },
+            color = if (selected) Color.White else if (darkTheme) Color.White.copy(alpha = 0.8f) else DeepPlumText,
             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
-        )
-    }
-}
-
-@Composable
-private fun CustomCategoryCheckRow(
-    label: String,
-    checked: Boolean,
-    textColor: Color,
-    testTag: String,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onCheckedChange(!checked) }
-            .padding(vertical = 2.dp)
-            .testTag(testTag)
-    ) {
-        Checkbox(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            colors = CheckboxDefaults.colors(
-                checkedColor = VibrantPinkPill,
-                checkmarkColor = Color.White
-            )
-        )
-        Text(
-            text = label,
-            color = textColor,
-            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium)
         )
     }
 }

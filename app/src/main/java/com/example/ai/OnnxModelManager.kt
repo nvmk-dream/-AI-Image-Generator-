@@ -107,6 +107,14 @@ class OnnxModelManager(private val context: Context) {
     fun slotModelFile(slot: DiffusionModelSlot): File =
         File(slotDir(slot), "model.onnx")
 
+    fun resolveExistingSlotFile(slot: DiffusionModelSlot): File? {
+        val mainFile = File(slotDir(slot), "model.onnx")
+        if (mainFile.exists() && mainFile.length() > 1024L) return mainFile
+        val altFile = File(modelsRootDir, slot.canonicalFileName)
+        if (altFile.exists() && altFile.length() > 1024L) return altFile
+        return null
+    }
+
     fun inspectCurrentMetrics(): RealDeviceAndModelMetrics {
         val (ortOk, ortVer) = runCatching {
             val env = OrtEnvironment.getEnvironment()

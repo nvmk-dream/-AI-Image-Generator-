@@ -5,13 +5,20 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.DiffusionModelSlot
+import com.example.ai.GenerationProgress
+import com.example.ai.OnnxDiffusionEngine
 import com.example.ai.OnnxModelManager
 import com.example.ai.RealDeviceAndModelMetrics
+import com.example.ai.SamplerType
 import com.example.data.AppLanguage
 import com.example.data.AppPreferencesRepository
 import com.example.data.AppPreferencesState
 import com.example.data.ContentSafetyMode
+import com.example.data.CreationsRepository
+import com.example.data.GeneratedCreation
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +38,7 @@ enum class BottomNavTab {
 enum class ActiveScreen {
     MAIN_TABS,
     SETTINGS,
+    CONTENT_SAFETY_SETTINGS,
     TEXT_TO_IMAGE,
     IMAGE_TO_IMAGE,
     CHARACTER_STUDIO,
@@ -44,10 +52,16 @@ data class ImageGeneratorUiState(
     val selectedTab: BottomNavTab = BottomNavTab.HOME,
     val preferences: AppPreferencesState = AppPreferencesState(),
     val metrics: RealDeviceAndModelMetrics = RealDeviceAndModelMetrics(),
+    val creations: List<GeneratedCreation> = emptyList(),
     val isImportingModels: Boolean = false,
     val importProgressText: String? = null,
+    val onnxVerificationReport: String? = null,
+    val isGenerating: Boolean = false,
+    val generationProgress: GenerationProgress? = null,
+    val generationErrorMessage: String? = null,
+    val latestGeneratedCreation: GeneratedCreation? = null,
     val statusToastMessage: String? = null,
-    val promptDraft: String = "",
+    val userPromptInput: String = "",
     val selectedInputPhotoUri: Uri? = null
 )
 
@@ -55,41 +69,66 @@ private data class TransientUiState(
     val activeScreen: ActiveScreen = ActiveScreen.MAIN_TABS,
     val selectedTab: BottomNavTab = BottomNavTab.HOME,
     val metrics: RealDeviceAndModelMetrics = RealDeviceAndModelMetrics(),
+    val creations: List<GeneratedCreation> = emptyList(),
     val isImportingModels: Boolean = false,
     val importProgressText: String? = null,
+    val onnxVerificationReport: String? = null,
+    val isGenerating: Boolean = false,
+    val generationProgress: GenerationProgress? = null,
+    val generationErrorMessage: String? = null,
+    val latestGeneratedCreation: GeneratedCreation? = null,
     val statusToastMessage: String? = null,
-    val promptDraft: String = "",
-    val selectedInputPhotoUri: Uri? = null
+    val userPromptInput: String? = null,
+    val selectedInputPhotoUri: Uri? = null,
+    val returnScreenForSafety: ActiveScreen = ActiveScreen.SETTINGS
 )
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefsRepo = AppPreferencesRepository(application)
     private val modelManager = OnnxModelManager(application)
+    private val creationsRepo = CreationsRepository(application)
+    private val diffusionEngine = OnnxDiffusionEngine(application, modelManager)
+
+    private var activeGenerationJob: Job? = null
 
     private val transientState = MutableStateFlow(
-        TransientUiState(metrics = modelManager.inspectCurrentMetrics())
+        TransientUiState(
+            metrics = modelManager.inspectCurrentMetrics(),
+            creations = creationsRepo.loadAllCreations()
+        )
     )
 
     val uiState: StateFlow<ImageGeneratorUiState> = combine(
         prefsRepo.preferencesFlow,
         transientState
     ) { prefs, transient ->
+        val effectiveUserPrompt = transient.userPromptInput ?: prefs.savedUserImagePrompt
         ImageGeneratorUiState(
             activeScreen = transient.activeScreen,
             selectedTab = transient.selectedTab,
             preferences = prefs,
             metrics = transient.metrics,
+            creations = transient.creations,
             isImportingModels = transient.isImportingModels,
             importProgressText = transient.importProgressText,
+            onnxVerificationReport = transient.onnxVerificationReport,
+            isGenerating = transient.isGenerating,
+            generationProgress = transient.generationProgress,
+            generationErrorMessage = transient.generationErrorMessage,
+            latestGeneratedCreation = transient.latestGeneratedCreation
+                ?: transient.creations.firstOrNull(),
             statusToastMessage = transient.statusToastMessage,
-            promptDraft = transient.promptDraft,
+            userPromptInput = effectiveUserPrompt,
             selectedInputPhotoUri = transient.selectedInputPhotoUri
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = ImageGeneratorUiState(metrics = transientState.value.metrics)
+        initialValue = ImageGeneratorUiState(
+            metrics = transientState.value.metrics,
+            creations = transientState.value.creations
+        )
     )
 
     fun refreshDeviceAndModelMetrics() {
@@ -102,7 +141,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun navigateToScreen(screen: ActiveScreen) {
-        transientState.update { it.copy(activeScreen = screen) }
+        transientState.update { current ->
+            val nextReturn = if (screen == ActiveScreen.CONTENT_SAFETY_SETTINGS &&
+                current.activeScreen != ActiveScreen.CONTENT_SAFETY_SETTINGS
+            ) {
+                current.activeScreen
+            } else {
+                current.returnScreenForSafety
+            }
+            current.copy(
+                activeScreen = screen,
+                returnScreenForSafety = nextReturn,
+                generationErrorMessage = null
+            )
+        }
         refreshDeviceAndModelMetrics()
     }
 
@@ -116,9 +168,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         refreshDeviceAndModelMetrics()
     }
 
+    fun navigateBackFromContentSafety() {
+        transientState.update { it.copy(activeScreen = it.returnScreenForSafety) }
+    }
+
     fun navigateBackToHome() {
         transientState.update {
-            if (it.activeScreen != ActiveScreen.MAIN_TABS) {
+            if (it.activeScreen == ActiveScreen.CONTENT_SAFETY_SETTINGS) {
+                it.copy(activeScreen = it.returnScreenForSafety)
+            } else if (it.activeScreen != ActiveScreen.MAIN_TABS) {
                 it.copy(activeScreen = ActiveScreen.MAIN_TABS)
             } else {
                 it.copy(selectedTab = BottomNavTab.HOME)
@@ -126,8 +184,44 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updatePromptDraft(text: String) {
-        transientState.update { it.copy(promptDraft = text) }
+    /**
+     * Updates and saves ONLY the User Image Prompt (never overwrites Content Safety Prompt).
+     */
+    fun updateUserImagePrompt(text: String) {
+        transientState.update { it.copy(userPromptInput = text, generationErrorMessage = null) }
+        viewModelScope.launch {
+            prefsRepo.saveUserImagePrompt(text)
+        }
+    }
+
+    /**
+     * Saves ONLY the Content Safety Prompt (never overwrites User Image Prompt).
+     */
+    fun saveContentSafetyPrompt(safetyPrompt: String) {
+        viewModelScope.launch {
+            prefsRepo.saveContentSafetyPrompt(safetyPrompt)
+            transientState.update {
+                it.copy(statusToastMessage = "Content Safety Prompt saved on device.")
+            }
+        }
+    }
+
+    fun resetContentSafetyPrompt() {
+        viewModelScope.launch {
+            prefsRepo.resetContentSafetyPrompt()
+            transientState.update {
+                it.copy(statusToastMessage = "Content Safety Prompt reset to default.")
+            }
+        }
+    }
+
+    fun selectSafetyModePreset(mode: ContentSafetyMode, templatePrompt: String) {
+        viewModelScope.launch {
+            prefsRepo.setSafetyMode(mode)
+            if (mode != ContentSafetyMode.CUSTOM) {
+                prefsRepo.saveContentSafetyPrompt(templatePrompt)
+            }
+        }
     }
 
     fun updateSelectedInputPhoto(uri: Uri?) {
@@ -167,24 +261,199 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         prefsRepo.setContentFilterEnabled(enabled)
     }
 
-    fun setSafetyMode(mode: ContentSafetyMode) = viewModelScope.launch {
-        prefsRepo.setSafetyMode(mode)
+    // Phase 3: Verify ONNX Runtime Sessions
+    fun verifyOnnxPipeline() {
+        viewModelScope.launch {
+            transientState.update {
+                it.copy(
+                    isImportingModels = true,
+                    importProgressText = "Verifying ONNX Runtime tensors..."
+                )
+            }
+            val mode = uiState.value.preferences.inferenceMode
+            val res = withContext(Dispatchers.Default) {
+                diffusionEngine.verifyInstalledModels(mode)
+            }
+            transientState.update {
+                it.copy(
+                    isImportingModels = false,
+                    importProgressText = null,
+                    onnxVerificationReport = res.getOrElse { err -> "Verification error: ${err.message}" }
+                )
+            }
+        }
     }
 
-    fun updateCustomCategory(
-        fashionGlamour: Boolean? = null,
-        swimwearBeach: Boolean? = null,
-        romanticPoses: Boolean? = null,
-        classicalArtistic: Boolean? = null,
-        fantasyAction: Boolean? = null
-    ) = viewModelScope.launch {
-        prefsRepo.updateCustomCategory(
-            fashionGlamour = fashionGlamour,
-            swimwearBeach = swimwearBeach,
-            romanticPoses = romanticPoses,
-            classicalArtistic = classicalArtistic,
-            fantasyAction = fantasyAction
-        )
+    // Phase 4: Offline Text-to-Image Execution
+    fun generateOfflineTextToImage(
+        sampler: SamplerType,
+        steps: Int,
+        guidanceScale: Float,
+        seed: Long,
+        negativePrompt: String
+    ) {
+        if (transientState.value.isGenerating) return
+
+        val stateSnapshot = uiState.value
+        val userPrompt = stateSnapshot.userPromptInput.trim()
+        if (userPrompt.isEmpty()) {
+            transientState.update {
+                it.copy(generationErrorMessage = "Please enter an image prompt first.")
+            }
+            return
+        }
+
+        // Final Generation Input = User Image Prompt + Saved Content Safety Prompt
+        val finalGenerationInput = stateSnapshot.preferences.buildFinalGenerationInput(userPrompt)
+
+        activeGenerationJob = viewModelScope.launch {
+            transientState.update {
+                it.copy(
+                    isGenerating = true,
+                    generationErrorMessage = null,
+                    generationProgress = GenerationProgress(
+                        stageTitle = "Preparing Offline ONNX Pipeline...",
+                        currentStep = 0,
+                        totalSteps = steps,
+                        percent = 2,
+                        elapsedMs = 0L
+                    )
+                )
+            }
+
+            val result = withContext(Dispatchers.Default) {
+                diffusionEngine.generateTextToImage(
+                    userPrompt = userPrompt,
+                    finalGenerationInput = finalGenerationInput,
+                    negativePrompt = negativePrompt,
+                    resolutionLabel = stateSnapshot.preferences.resolution,
+                    inferenceMode = stateSnapshot.preferences.inferenceMode,
+                    samplerType = sampler,
+                    steps = steps,
+                    guidanceScale = guidanceScale,
+                    seed = seed,
+                    onProgress = { prog ->
+                        transientState.update { s -> s.copy(generationProgress = prog) }
+                    }
+                )
+            }
+
+            result.fold(
+                onSuccess = { genOut ->
+                    val savedCreation = withContext(Dispatchers.IO) {
+                        creationsRepo.saveCreation(
+                            bitmap = genOut.bitmap,
+                            userPrompt = userPrompt,
+                            finalGenerationInput = genOut.finalGenerationInput,
+                            resolution = genOut.resolutionLabel,
+                            steps = genOut.steps,
+                            seed = genOut.seed,
+                            durationMs = genOut.durationMs
+                        )
+                    }
+                    val allCreations = withContext(Dispatchers.IO) {
+                        creationsRepo.loadAllCreations()
+                    }
+                    val refreshedMetrics = withContext(Dispatchers.IO) {
+                        modelManager.inspectCurrentMetrics()
+                    }
+                    transientState.update {
+                        it.copy(
+                            isGenerating = false,
+                            generationProgress = null,
+                            creations = allCreations,
+                            latestGeneratedCreation = savedCreation,
+                            metrics = refreshedMetrics,
+                            statusToastMessage = "Image generated offline in ${genOut.durationMs / 1000}s!"
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    val cancelled = err is CancellationException ||
+                        err.message?.contains("cancelled", ignoreCase = true) == true
+                    val refreshedMetrics = withContext(Dispatchers.IO) {
+                        modelManager.inspectCurrentMetrics()
+                    }
+                    transientState.update {
+                        it.copy(
+                            isGenerating = false,
+                            generationProgress = null,
+                            metrics = refreshedMetrics,
+                            generationErrorMessage = if (cancelled) null else err.message,
+                            statusToastMessage = if (cancelled) "Generation cancelled & RAM freed." else null
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun cancelGeneration() {
+        diffusionEngine.requestCancel()
+        activeGenerationJob?.cancel()
+        activeGenerationJob = null
+        viewModelScope.launch {
+            val updated = withContext(Dispatchers.IO) {
+                modelManager.unloadSessionsFromRam()
+                modelManager.inspectCurrentMetrics()
+            }
+            transientState.update {
+                it.copy(
+                    isGenerating = false,
+                    generationProgress = null,
+                    metrics = updated,
+                    statusToastMessage = "Generation cancelled."
+                )
+            }
+        }
+    }
+
+    // Gallery & Creations Actions
+    fun exportCreationToGallery(creation: GeneratedCreation) {
+        viewModelScope.launch {
+            val res = withContext(Dispatchers.IO) {
+                creationsRepo.exportToPhoneGallery(creation)
+            }
+            transientState.update {
+                it.copy(
+                    statusToastMessage = res.fold(
+                        onSuccess = { path -> "Saved to Gallery: $path" },
+                        onFailure = { e -> "Gallery save error: ${e.message}" }
+                    )
+                )
+            }
+        }
+    }
+
+    fun toggleFavoriteCreation(id: String) {
+        viewModelScope.launch {
+            val updated = withContext(Dispatchers.IO) { creationsRepo.toggleFavorite(id) }
+            transientState.update { state ->
+                state.copy(
+                    creations = updated,
+                    latestGeneratedCreation = state.latestGeneratedCreation?.let { latest ->
+                        updated.firstOrNull { it.id == latest.id } ?: latest
+                    }
+                )
+            }
+        }
+    }
+
+    fun deleteCreation(id: String) {
+        viewModelScope.launch {
+            val updated = withContext(Dispatchers.IO) { creationsRepo.deleteCreation(id) }
+            transientState.update { state ->
+                state.copy(
+                    creations = updated,
+                    latestGeneratedCreation = if (state.latestGeneratedCreation?.id == id) {
+                        updated.firstOrNull()
+                    } else {
+                        state.latestGeneratedCreation
+                    },
+                    statusToastMessage = "Deleted image."
+                )
+            }
+        }
     }
 
     // Model & Cache Management actions
@@ -194,7 +463,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     isImportingModels = true,
                     importProgressText = "Scanning selected folder...",
-                    statusToastMessage = null
+                    statusToastMessage = null,
+                    onnxVerificationReport = null
                 )
             }
             val result = withContext(Dispatchers.IO) {
@@ -281,6 +551,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             transientState.update {
                 it.copy(
                     metrics = updated,
+                    onnxVerificationReport = null,
                     statusToastMessage = "Removed ${slot.canonicalFileName}"
                 )
             }

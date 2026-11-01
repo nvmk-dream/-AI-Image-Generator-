@@ -33,11 +33,13 @@ import com.example.ui.AppViewModel
 import com.example.ui.BottomNavTab
 import com.example.ui.components.DreamyHeartBackground
 import com.example.ui.components.GlassBottomNavBar
-import com.example.ui.screens.EmptyCollectionTabScreen
+import com.example.ui.screens.ContentSafetySettingsScreen
+import com.example.ui.screens.CreationsCollectionScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.ModelsTabScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.StudioWorkspaceScreen
+import com.example.ui.screens.TextToImageScreen
 import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
@@ -59,7 +61,6 @@ fun ImageGeneratorRoot(
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingSlotForSingleImport by remember { mutableStateOf(DiffusionModelSlot.TEXT_ENCODER) }
 
-    // One-Touch Folder Picker (OpenDocumentTree)
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { treeUri ->
@@ -74,7 +75,6 @@ fun ImageGeneratorRoot(
         }
     }
 
-    // Single ONNX File Picker
     val singleModelPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { fileUri ->
@@ -83,7 +83,6 @@ fun ImageGeneratorRoot(
         }
     }
 
-    // Zero-permission Android Photo Picker for Reference Photos
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { photoUri ->
@@ -142,32 +141,40 @@ fun ImageGeneratorRoot(
                                         }
                                     )
 
-                                    BottomNavTab.FAVORITES -> EmptyCollectionTabScreen(
+                                    BottomNavTab.FAVORITES -> CreationsCollectionScreen(
                                         title = if (uiState.preferences.isTamil) "Favorites (பிடித்தவை)" else "Favorites",
-                                        subtitle = if (uiState.preferences.isTamil) {
+                                        emptySubtitle = if (uiState.preferences.isTamil) {
                                             "நீங்கள் நட்சத்திரமிட்ட படங்கள் இங்கே தோன்றும்."
                                         } else {
                                             "Starred offline creations will be saved right here."
                                         },
-                                        isFavorites = true,
+                                        creations = uiState.creations.filter { it.isFavorite },
+                                        isFavoritesView = true,
                                         darkTheme = uiState.preferences.darkTheme,
                                         onStartCreating = {
                                             appViewModel.navigateToScreen(ActiveScreen.TEXT_TO_IMAGE)
-                                        }
+                                        },
+                                        onToggleFavorite = appViewModel::toggleFavoriteCreation,
+                                        onSaveToGallery = appViewModel::exportCreationToGallery,
+                                        onDeleteCreation = appViewModel::deleteCreation
                                     )
 
-                                    BottomNavTab.MY_CREATIONS -> EmptyCollectionTabScreen(
+                                    BottomNavTab.MY_CREATIONS -> CreationsCollectionScreen(
                                         title = if (uiState.preferences.isTamil) "My Creations (என் படைப்புகள்)" else "My Creations",
-                                        subtitle = if (uiState.preferences.isTamil) {
+                                        emptySubtitle = if (uiState.preferences.isTamil) {
                                             "உருவாக்கப்பட்ட அனைத்துப் படங்களும் இங்கே சேமிக்கப்படும்."
                                         } else {
                                             "All images generated offline on your device will appear here."
                                         },
-                                        isFavorites = false,
+                                        creations = uiState.creations,
+                                        isFavoritesView = false,
                                         darkTheme = uiState.preferences.darkTheme,
                                         onStartCreating = {
                                             appViewModel.navigateToScreen(ActiveScreen.TEXT_TO_IMAGE)
-                                        }
+                                        },
+                                        onToggleFavorite = appViewModel::toggleFavoriteCreation,
+                                        onSaveToGallery = appViewModel::exportCreationToGallery,
+                                        onDeleteCreation = appViewModel::deleteCreation
                                     )
 
                                     BottomNavTab.MODELS -> ModelsTabScreen(
@@ -175,9 +182,11 @@ fun ImageGeneratorRoot(
                                         metrics = uiState.metrics,
                                         isImporting = uiState.isImportingModels,
                                         importProgressText = uiState.importProgressText,
+                                        verificationReport = uiState.onnxVerificationReport,
                                         onOneTouchFolderUpload = {
                                             folderPickerLauncher.launch(null)
                                         },
+                                        onVerifyPipeline = appViewModel::verifyOnnxPipeline,
                                         onSingleSlotUpload = { slot ->
                                             pendingSlotForSingleImport = slot
                                             singleModelPickerLauncher.launch(arrayOf("*/*"))
@@ -196,6 +205,9 @@ fun ImageGeneratorRoot(
                                 onOpenModelsManager = {
                                     appViewModel.selectBottomTab(BottomNavTab.MODELS)
                                 },
+                                onOpenContentSafetyPage = {
+                                    appViewModel.navigateToScreen(ActiveScreen.CONTENT_SAFETY_SETTINGS)
+                                },
                                 onResolutionChange = appViewModel::setResolution,
                                 onInferenceModeChange = appViewModel::setInferenceMode,
                                 onOfflineModeChange = appViewModel::setOfflineMode,
@@ -203,19 +215,69 @@ fun ImageGeneratorRoot(
                                 onDarkThemeChange = appViewModel::setDarkTheme,
                                 onNotificationsChange = appViewModel::setNotificationsEnabled,
                                 onContentFilterToggle = appViewModel::setContentFilterEnabled,
-                                onSafetyModeChange = appViewModel::setSafetyMode,
-                                onCustomCategoryChange = appViewModel::updateCustomCategory,
                                 onClearCache = appViewModel::clearCache,
                                 onUnloadRam = appViewModel::unloadAiFromRam
+                            )
+
+                            ActiveScreen.CONTENT_SAFETY_SETTINGS -> ContentSafetySettingsScreen(
+                                preferences = uiState.preferences,
+                                currentUserPromptDraft = uiState.userPromptInput,
+                                onBack = { appViewModel.navigateBackFromContentSafety() },
+                                onToggleContentFilter = appViewModel::setContentFilterEnabled,
+                                onSelectModePreset = appViewModel::selectSafetyModePreset,
+                                onSaveContentSafetyPrompt = appViewModel::saveContentSafetyPrompt,
+                                onResetContentSafetyPrompt = appViewModel::resetContentSafetyPrompt
+                            )
+
+                            ActiveScreen.TEXT_TO_IMAGE -> TextToImageScreen(
+                                preferences = uiState.preferences,
+                                metrics = uiState.metrics,
+                                userPrompt = uiState.userPromptInput,
+                                isGenerating = uiState.isGenerating,
+                                progress = uiState.generationProgress,
+                                latestCreation = uiState.latestGeneratedCreation,
+                                errorMessage = uiState.generationErrorMessage,
+                                onUserPromptChange = appViewModel::updateUserImagePrompt,
+                                onGenerate = appViewModel::generateOfflineTextToImage,
+                                onCancelGeneration = appViewModel::cancelGeneration,
+                                onExportToGallery = appViewModel::exportCreationToGallery,
+                                onToggleFavorite = appViewModel::toggleFavoriteCreation,
+                                onOpenModelsTab = {
+                                    appViewModel.selectBottomTab(BottomNavTab.MODELS)
+                                },
+                                onOpenContentSafetySettings = {
+                                    appViewModel.navigateToScreen(ActiveScreen.CONTENT_SAFETY_SETTINGS)
+                                },
+                                onBack = { appViewModel.navigateBackToHome() }
+                            )
+
+                            ActiveScreen.MY_GALLERY -> CreationsCollectionScreen(
+                                title = "My Gallery",
+                                emptySubtitle = if (uiState.preferences.isTamil) {
+                                    "நீங்கள் உருவாக்கும் படங்கள் இங்கே சேமிக்கப்படும்."
+                                } else {
+                                    "Your offline generated photos will appear here."
+                                },
+                                creations = uiState.creations,
+                                isFavoritesView = false,
+                                darkTheme = uiState.preferences.darkTheme,
+                                showBackButton = true,
+                                onBack = { appViewModel.navigateBackToHome() },
+                                onStartCreating = {
+                                    appViewModel.navigateToScreen(ActiveScreen.TEXT_TO_IMAGE)
+                                },
+                                onToggleFavorite = appViewModel::toggleFavoriteCreation,
+                                onSaveToGallery = appViewModel::exportCreationToGallery,
+                                onDeleteCreation = appViewModel::deleteCreation
                             )
 
                             else -> StudioWorkspaceScreen(
                                 screen = screen,
                                 preferences = uiState.preferences,
                                 metrics = uiState.metrics,
-                                promptDraft = uiState.promptDraft,
+                                promptDraft = uiState.userPromptInput,
                                 selectedPhotoUri = uiState.selectedInputPhotoUri,
-                                onPromptChange = appViewModel::updatePromptDraft,
+                                onPromptChange = appViewModel::updateUserImagePrompt,
                                 onPickPhoto = {
                                     photoPickerLauncher.launch(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)

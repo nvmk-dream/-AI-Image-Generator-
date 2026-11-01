@@ -77,10 +77,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v${{ github.run_number }}"
+          COMMIT_MSG="$(git log -1 --pretty=%B | head -n 5)"
           gh release delete "$TAG" --yes --cleanup-tag --repo "${{ github.repository }}" 2>/dev/null || true
           gh release create "$TAG" "${{ env.APK_NAME }}" \
             --title "Image Generator — Build ${{ github.run_number }}" \
-            --notes "Phase 2 Build: Offline AI Image Generator (Pink Hearts Glassmorphism UI, Settings, Content Safety Modes & One-Touch ONNX Folder Upload)" \
+            --notes "Offline AI Image Generator Build v${{ github.run_number }}: ${COMMIT_MSG}" \
             --latest \
             --repo "${{ github.repository }}"
 
