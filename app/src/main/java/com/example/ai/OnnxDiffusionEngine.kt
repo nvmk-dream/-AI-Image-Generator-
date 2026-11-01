@@ -80,7 +80,7 @@ class OnnxDiffusionEngine(
                 continue
             }
             val t0 = System.currentTimeMillis()
-            val session = createSafeSession(env, file, preferNnapi)
+            val session = createSafeSession(env, file, inferenceMode)
             session.use { s ->
                 val dt = System.currentTimeMillis() - t0
                 val inputsDesc = s.inputInfo.entries.joinToString { (name, node) ->
@@ -139,15 +139,26 @@ class OnnxDiffusionEngine(
         val latentH = height / 8
         val latentChannels = 4
         val latentSize = latentChannels * latentH * latentW
-        val preferNnapi = inferenceMode.contains("NNAPI", ignoreCase = true)
         val env = OrtEnvironment.getEnvironment()
+
+        val precheckLcm = detectLikelyLcmModel(unetFile = unetFile, unetSession = null)
+        val plannedSampler = if (samplerType == SamplerType.LCM_FAST && !precheckLcm) {
+            SamplerType.EULER_STANDARD
+        } else {
+            samplerType
+        }
+        val plannedSteps = if (plannedSampler == SamplerType.EULER_STANDARD && samplerType == SamplerType.LCM_FAST) {
+            steps.coerceAtLeast(12)
+        } else {
+            steps
+        }
 
         // 3. Tokenize Final Generation Input (User Prompt + Saved Content Safety Prompt)
         onProgress(
             GenerationProgress(
                 stageTitle = "Encoding Prompt (CLIP Text Encoder)...",
                 currentStep = 0,
-                totalSteps = steps,
+                totalSteps = plannedSteps,
                 percent = 6,
                 elapsedMs = System.currentTimeMillis() - startMs
             )
@@ -156,22 +167,16 @@ class OnnxDiffusionEngine(
 
         val normalizedClipPrompt = OfflineTamilPromptTranslator.normalizeForClip(finalGenerationInput)
         val posTokenIds = tokenizer.encode(normalizedClipPrompt)
-        val needClassifierFreeGuidance = samplerType == SamplerType.EULER_STANDARD && guidanceScale > 1.15f
-        val negTokenIds = if (needClassifierFreeGuidance) {
-            tokenizer.encode(negativePrompt.ifBlank { "blurry, deformed, bad anatomy, low quality" })
-        } else {
-            null
-        }
+        // Always encode negative prompt (~236KB) so Classifier-Free Guidance is ready if UNet is non-LCM
+        val negTokenIds = tokenizer.encode(
+            negativePrompt.ifBlank { "blurry, deformed, bad anatomy, low quality" }
+        )
 
         // 4. Stage 1: Run Text Encoder & immediately release session to save RAM
-        val (posEmbeddings, negEmbeddings, hiddenDim) = createSafeSession(env, textEncoderFile, preferNnapi).use { teSession ->
+        val (posEmbeddings, negEmbeddings, hiddenDim) = createSafeSession(env, textEncoderFile, inferenceMode).use { teSession ->
             val posOut = runTextEncoder(env, teSession, posTokenIds)
-            val negOut = if (negTokenIds != null) {
-                checkNotCancelled()
-                runTextEncoder(env, teSession, negTokenIds).first
-            } else {
-                null
-            }
+            checkNotCancelled()
+            val negOut = runTextEncoder(env, teSession, negTokenIds).first
             Triple(posOut.first, negOut, posOut.second)
         }
         System.gc()
@@ -180,28 +185,51 @@ class OnnxDiffusionEngine(
             GenerationProgress(
                 stageTitle = "Loading UNet Diffusion Engine...",
                 currentStep = 0,
-                totalSteps = steps,
+                totalSteps = plannedSteps,
                 percent = 14,
                 elapsedMs = System.currentTimeMillis() - startMs
             )
         )
         checkNotCancelled()
 
-        // 5. Stage 2: Run UNet Denoising Loop (LCM or Euler) & release session after loop
-        val denoisedLatents = createSafeSession(env, unetFile, preferNnapi).use { unetSession ->
-            if (samplerType == SamplerType.LCM_FAST) {
-                val scheduler = DiffusionSchedulers.LcmSession(steps)
+        var executedTotalSteps = plannedSteps
+
+        // 5. Stage 2: Run UNet Denoising Loop (auto-adapts Euler CFG if standard SD 1.5 UNet is installed)
+        val denoisedLatents = createSafeSession(env, unetFile, inferenceMode).use { unetSession ->
+            val isLcmModel = detectLikelyLcmModel(unetFile = unetFile, unetSession = unetSession)
+            val effectiveSampler = if (samplerType == SamplerType.LCM_FAST && !isLcmModel) {
+                SamplerType.EULER_STANDARD
+            } else {
+                samplerType
+            }
+            val effectiveSteps = if (effectiveSampler == SamplerType.EULER_STANDARD && samplerType == SamplerType.LCM_FAST) {
+                steps.coerceAtLeast(12)
+            } else {
+                steps
+            }
+            val effectiveGuidance = if (effectiveSampler == SamplerType.EULER_STANDARD &&
+                samplerType == SamplerType.LCM_FAST &&
+                guidanceScale < 4.0f
+            ) {
+                7.0f
+            } else {
+                guidanceScale
+            }
+            executedTotalSteps = effectiveSteps
+
+            if (effectiveSampler == SamplerType.LCM_FAST) {
+                val scheduler = DiffusionSchedulers.LcmSession(effectiveSteps)
                 var latents = DiffusionSchedulers.createRandomLatents(latentSize, seed, initSigma = 1.0f)
 
-                for (stepIdx in 0 until steps) {
+                for (stepIdx in 0 until effectiveSteps) {
                     checkNotCancelled()
                     val t = scheduler.timesteps[stepIdx]
-                    val pct = 16 + (((stepIdx + 1).toFloat() / steps.toFloat()) * 68f).toInt()
+                    val pct = 16 + (((stepIdx + 1).toFloat() / effectiveSteps.toFloat()) * 68f).toInt()
                     onProgress(
                         GenerationProgress(
-                            stageTitle = "Generating (LCM Step ${stepIdx + 1}/$steps)...",
+                            stageTitle = "Generating (LCM Step ${stepIdx + 1}/$effectiveSteps)...",
                             currentStep = stepIdx + 1,
-                            totalSteps = steps,
+                            totalSteps = effectiveSteps,
                             percent = pct,
                             elapsedMs = System.currentTimeMillis() - startMs
                         )
@@ -216,7 +244,7 @@ class OnnxDiffusionEngine(
                         timestep = t,
                         encoderHiddenStates = posEmbeddings,
                         hiddenDim = hiddenDim,
-                        guidanceScale = guidanceScale,
+                        guidanceScale = effectiveGuidance,
                         imageWidth = width,
                         imageHeight = height
                     )
@@ -224,22 +252,22 @@ class OnnxDiffusionEngine(
                 }
                 latents
             } else {
-                val scheduler = DiffusionSchedulers.EulerSession(steps)
+                val scheduler = DiffusionSchedulers.EulerSession(effectiveSteps)
                 var latents = DiffusionSchedulers.createRandomLatents(
                     size = latentSize,
                     seed = seed,
                     initSigma = scheduler.initNoiseSigma
                 )
 
-                for (stepIdx in 0 until steps) {
+                for (stepIdx in 0 until effectiveSteps) {
                     checkNotCancelled()
                     val t = scheduler.timesteps[stepIdx]
-                    val pct = 16 + (((stepIdx + 1).toFloat() / steps.toFloat()) * 68f).toInt()
+                    val pct = 16 + (((stepIdx + 1).toFloat() / effectiveSteps.toFloat()) * 68f).toInt()
                     onProgress(
                         GenerationProgress(
-                            stageTitle = "Denoising (Euler Step ${stepIdx + 1}/$steps)...",
+                            stageTitle = "Denoising (Step ${stepIdx + 1}/$effectiveSteps)...",
                             currentStep = stepIdx + 1,
-                            totalSteps = steps,
+                            totalSteps = effectiveSteps,
                             percent = pct,
                             elapsedMs = System.currentTimeMillis() - startMs
                         )
@@ -255,12 +283,12 @@ class OnnxDiffusionEngine(
                         timestep = t,
                         encoderHiddenStates = posEmbeddings,
                         hiddenDim = hiddenDim,
-                        guidanceScale = guidanceScale,
+                        guidanceScale = effectiveGuidance,
                         imageWidth = width,
                         imageHeight = height
                     )
 
-                    val finalNoise = if (negEmbeddings != null) {
+                    val finalNoise = if (effectiveGuidance > 1.15f) {
                         checkNotCancelled()
                         val uncondNoise = runUnetSingleBatch(
                             env = env,
@@ -271,12 +299,12 @@ class OnnxDiffusionEngine(
                             timestep = t,
                             encoderHiddenStates = negEmbeddings,
                             hiddenDim = hiddenDim,
-                            guidanceScale = guidanceScale,
+                            guidanceScale = effectiveGuidance,
                             imageWidth = width,
                             imageHeight = height
                         )
                         FloatArray(condNoise.size) { i ->
-                            uncondNoise[i] + guidanceScale * (condNoise[i] - uncondNoise[i])
+                            uncondNoise[i] + effectiveGuidance * (condNoise[i] - uncondNoise[i])
                         }
                     } else {
                         condNoise
@@ -293,8 +321,8 @@ class OnnxDiffusionEngine(
         onProgress(
             GenerationProgress(
                 stageTitle = "Decoding Final Photo (VAE Decoder)...",
-                currentStep = steps,
-                totalSteps = steps,
+                currentStep = executedTotalSteps,
+                totalSteps = executedTotalSteps,
                 percent = 90,
                 elapsedMs = System.currentTimeMillis() - startMs
             )
@@ -305,7 +333,7 @@ class OnnxDiffusionEngine(
             denoisedLatents[i] / 0.18215f
         }
 
-        val bitmap = createSafeSession(env, vaeDecoderFile, preferNnapi).use { vaeSession ->
+        val bitmap = createSafeSession(env, vaeDecoderFile, inferenceMode).use { vaeSession ->
             runVaeDecoderToBitmap(
                 env = env,
                 vaeSession = vaeSession,
@@ -322,8 +350,8 @@ class OnnxDiffusionEngine(
         onProgress(
             GenerationProgress(
                 stageTitle = "Completed!",
-                currentStep = steps,
-                totalSteps = steps,
+                currentStep = executedTotalSteps,
+                totalSteps = executedTotalSteps,
                 percent = 100,
                 elapsedMs = totalMs
             )
@@ -334,7 +362,7 @@ class OnnxDiffusionEngine(
             finalGenerationInput = finalGenerationInput,
             normalizedClipPrompt = normalizedClipPrompt,
             seed = seed,
-            steps = steps,
+            steps = executedTotalSteps,
             resolutionLabel = "$width × $height",
             durationMs = totalMs
         )
@@ -387,11 +415,22 @@ class OnnxDiffusionEngine(
         val latentW = width / 8
         val latentH = height / 8
         val latentSize = 4 * latentH * latentW
-        val preferNnapi = inferenceMode.contains("NNAPI", ignoreCase = true)
         val env = OrtEnvironment.getEnvironment()
 
-        val startStepIndex = DiffusionSchedulers.computeImg2ImgStartStep(steps, strength)
-        val activeSteps = (steps - startStepIndex).coerceAtLeast(1)
+        val precheckLcm = detectLikelyLcmModel(unetFile = unetFile, unetSession = null)
+        val preSampler = if (samplerType == SamplerType.LCM_FAST && !precheckLcm) {
+            SamplerType.EULER_STANDARD
+        } else {
+            samplerType
+        }
+        val preSteps = if (preSampler == SamplerType.EULER_STANDARD && samplerType == SamplerType.LCM_FAST) {
+            steps.coerceAtLeast(12)
+        } else {
+            steps
+        }
+
+        var startStepIndex = DiffusionSchedulers.computeImg2ImgStartStep(preSteps, strength)
+        var activeSteps = (preSteps - startStepIndex).coerceAtLeast(1)
 
         // 3. Auto Center-Crop Reference Photo & Save 1:1 Before Preview
         onProgress(
@@ -415,7 +454,7 @@ class OnnxDiffusionEngine(
 
         // 4. Stage 0: Run VAE Encoder & immediately close session to free RAM
         val cleanImageLatents = try {
-            createSafeSession(env, vaeEncoderFile, preferNnapi).use { vaeEncSession ->
+            createSafeSession(env, vaeEncoderFile, inferenceMode).use { vaeEncSession ->
                 runVaeEncoder(
                     env = env,
                     vaeEncSession = vaeEncSession,
@@ -443,21 +482,14 @@ class OnnxDiffusionEngine(
 
         val normalizedClipPrompt = OfflineTamilPromptTranslator.normalizeForClip(finalGenerationInput)
         val posTokenIds = tokenizer.encode(normalizedClipPrompt)
-        val needClassifierFreeGuidance = samplerType == SamplerType.EULER_STANDARD && guidanceScale > 1.15f
-        val negTokenIds = if (needClassifierFreeGuidance) {
-            tokenizer.encode(negativePrompt.ifBlank { "blurry, deformed, bad anatomy, low quality" })
-        } else {
-            null
-        }
+        val negTokenIds = tokenizer.encode(
+            negativePrompt.ifBlank { "blurry, deformed, bad anatomy, low quality" }
+        )
 
-        val (posEmbeddings, negEmbeddings, hiddenDim) = createSafeSession(env, textEncoderFile, preferNnapi).use { teSession ->
+        val (posEmbeddings, negEmbeddings, hiddenDim) = createSafeSession(env, textEncoderFile, inferenceMode).use { teSession ->
             val posOut = runTextEncoder(env, teSession, posTokenIds)
-            val negOut = if (negTokenIds != null) {
-                checkNotCancelled()
-                runTextEncoder(env, teSession, negTokenIds).first
-            } else {
-                null
-            }
+            checkNotCancelled()
+            val negOut = runTextEncoder(env, teSession, negTokenIds).first
             Triple(posOut.first, negOut, posOut.second)
         }
         System.gc()
@@ -474,13 +506,35 @@ class OnnxDiffusionEngine(
         )
         checkNotCancelled()
 
-        val denoisedLatents = createSafeSession(env, unetFile, preferNnapi).use { unetSession ->
-            if (samplerType == SamplerType.LCM_FAST) {
-                val scheduler = DiffusionSchedulers.LcmSession(steps)
+        val denoisedLatents = createSafeSession(env, unetFile, inferenceMode).use { unetSession ->
+            val isLcmModel = detectLikelyLcmModel(unetFile = unetFile, unetSession = unetSession)
+            val effectiveSampler = if (samplerType == SamplerType.LCM_FAST && !isLcmModel) {
+                SamplerType.EULER_STANDARD
+            } else {
+                samplerType
+            }
+            val effectiveSteps = if (effectiveSampler == SamplerType.EULER_STANDARD && samplerType == SamplerType.LCM_FAST) {
+                steps.coerceAtLeast(12)
+            } else {
+                steps
+            }
+            val effectiveGuidance = if (effectiveSampler == SamplerType.EULER_STANDARD &&
+                samplerType == SamplerType.LCM_FAST &&
+                guidanceScale < 4.0f
+            ) {
+                7.0f
+            } else {
+                guidanceScale
+            }
+            startStepIndex = DiffusionSchedulers.computeImg2ImgStartStep(effectiveSteps, strength)
+            activeSteps = (effectiveSteps - startStepIndex).coerceAtLeast(1)
+
+            if (effectiveSampler == SamplerType.LCM_FAST) {
+                val scheduler = DiffusionSchedulers.LcmSession(effectiveSteps)
                 var latents = scheduler.addNoise(cleanImageLatents, startStepIndex, seed)
                 var executed = 0
 
-                for (stepIdx in startStepIndex until steps) {
+                for (stepIdx in startStepIndex until effectiveSteps) {
                     checkNotCancelled()
                     executed++
                     val t = scheduler.timesteps[stepIdx]
@@ -504,7 +558,7 @@ class OnnxDiffusionEngine(
                         timestep = t,
                         encoderHiddenStates = posEmbeddings,
                         hiddenDim = hiddenDim,
-                        guidanceScale = guidanceScale,
+                        guidanceScale = effectiveGuidance,
                         imageWidth = width,
                         imageHeight = height
                     )
@@ -512,18 +566,18 @@ class OnnxDiffusionEngine(
                 }
                 latents
             } else {
-                val scheduler = DiffusionSchedulers.EulerSession(steps)
+                val scheduler = DiffusionSchedulers.EulerSession(effectiveSteps)
                 var latents = scheduler.addNoise(cleanImageLatents, startStepIndex, seed)
                 var executed = 0
 
-                for (stepIdx in startStepIndex until steps) {
+                for (stepIdx in startStepIndex until effectiveSteps) {
                     checkNotCancelled()
                     executed++
                     val t = scheduler.timesteps[stepIdx]
                     val pct = 24 + ((executed.toFloat() / activeSteps.toFloat()) * 64f).toInt()
                     onProgress(
                         GenerationProgress(
-                            stageTitle = "Transforming (Euler Step $executed/$activeSteps)...",
+                            stageTitle = "Transforming (Step $executed/$activeSteps)...",
                             currentStep = executed,
                             totalSteps = activeSteps,
                             percent = pct,
@@ -541,12 +595,12 @@ class OnnxDiffusionEngine(
                         timestep = t,
                         encoderHiddenStates = posEmbeddings,
                         hiddenDim = hiddenDim,
-                        guidanceScale = guidanceScale,
+                        guidanceScale = effectiveGuidance,
                         imageWidth = width,
                         imageHeight = height
                     )
 
-                    val finalNoise = if (negEmbeddings != null) {
+                    val finalNoise = if (effectiveGuidance > 1.15f) {
                         checkNotCancelled()
                         val uncondNoise = runUnetSingleBatch(
                             env = env,
@@ -557,12 +611,12 @@ class OnnxDiffusionEngine(
                             timestep = t,
                             encoderHiddenStates = negEmbeddings,
                             hiddenDim = hiddenDim,
-                            guidanceScale = guidanceScale,
+                            guidanceScale = effectiveGuidance,
                             imageWidth = width,
                             imageHeight = height
                         )
                         FloatArray(condNoise.size) { i ->
-                            uncondNoise[i] + guidanceScale * (condNoise[i] - uncondNoise[i])
+                            uncondNoise[i] + effectiveGuidance * (condNoise[i] - uncondNoise[i])
                         }
                     } else {
                         condNoise
@@ -591,7 +645,7 @@ class OnnxDiffusionEngine(
             denoisedLatents[i] / 0.18215f
         }
 
-        val bitmap = createSafeSession(env, vaeDecoderFile, preferNnapi).use { vaeSession ->
+        val bitmap = createSafeSession(env, vaeDecoderFile, inferenceMode).use { vaeSession ->
             runVaeDecoderToBitmap(
                 env = env,
                 vaeSession = vaeSession,
@@ -693,24 +747,87 @@ class OnnxDiffusionEngine(
         }
     }
 
+    private fun detectLikelyLcmModel(unetFile: File, unetSession: OrtSession?): Boolean {
+        if (unetSession != null && unetSession.inputNames.any { it.contains("timestep_cond", ignoreCase = true) }) {
+            return true
+        }
+        val sourceMeta = File(unetFile.parentFile, "source_name.meta")
+            .takeIf { it.exists() }
+            ?.readText()
+            .orEmpty()
+        if (sourceMeta.contains("lcm", ignoreCase = true)) {
+            return true
+        }
+        val schedulerCfgFile = File(modelManager.modelsRootDir, "tokenizer/scheduler_config.json")
+        if (schedulerCfgFile.exists()) {
+            val cfg = runCatching { schedulerCfgFile.readText() }.getOrDefault("")
+            if (cfg.contains("LCMScheduler", ignoreCase = true)) return true
+            if (cfg.contains("PNDMScheduler", ignoreCase = true) ||
+                cfg.contains("Euler", ignoreCase = true) ||
+                cfg.contains("DDIM", ignoreCase = true) ||
+                cfg.contains("LMSDiscrete", ignoreCase = true) ||
+                cfg.contains("DPMSolver", ignoreCase = true)
+            ) {
+                return false
+            }
+        }
+        val companionBytes = unetFile.parentFile?.listFiles()
+            ?.filter { it.isFile && it.absolutePath != unetFile.absolutePath && !it.name.endsWith(".meta") }
+            ?.sumOf { it.length() } ?: 0L
+        val totalUnetBytes = unetFile.length() + companionBytes
+        // Full 3.44 GB FP32 SD 1.5 export without timestep_cond or LCM metadata is standard SD 1.5
+        if (totalUnetBytes > 2_500_000_000L) {
+            return false
+        }
+        return true
+    }
+
     private fun createSafeSession(
         env: OrtEnvironment,
         modelFile: File,
-        preferNnapi: Boolean
+        inferenceMode: String
     ): OrtSession {
-        if (preferNnapi) {
+        val preferNnapi = inferenceMode.contains("NNAPI", ignoreCase = true)
+        val lowRamMode = inferenceMode.contains("Low-RAM", ignoreCase = true)
+        val companionBytes = modelFile.parentFile?.listFiles()
+            ?.filter { it.isFile && it.absolutePath != modelFile.absolutePath && !it.name.endsWith(".meta") }
+            ?.sumOf { it.length() } ?: 0L
+        val totalBytes = modelFile.length() + companionBytes
+        val isLargeExternalModel = totalBytes > 600L * 1024L * 1024L
+        val cpuThreads = Runtime.getRuntime().availableProcessors().coerceIn(4, 6)
+
+        if (preferNnapi && !isLargeExternalModel) {
             runCatching {
                 OrtSession.SessionOptions().use { opts ->
-                    opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                    opts.setIntraOpNumThreads(4)
+                    opts.setOptimizationLevel(
+                        if (lowRamMode) OrtSession.SessionOptions.OptLevel.BASIC_OPT
+                        else OrtSession.SessionOptions.OptLevel.ALL_OPT
+                    )
+                    opts.setIntraOpNumThreads(cpuThreads)
+                    if (lowRamMode) {
+                        opts.setCPUArenaAllocator(false)
+                        opts.setMemoryPatternOptimization(false)
+                    }
                     opts.addNnapi(EnumSet.noneOf(ai.onnxruntime.providers.NNAPIFlags::class.java))
                     return env.createSession(modelFile.absolutePath, opts)
                 }
             }
         }
         OrtSession.SessionOptions().use { opts ->
-            opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-            opts.setIntraOpNumThreads(4)
+            // Use BASIC_OPT + Arena disabled on >600MB models (e.g. 3.44 GB FP32 UNet + weights.pb)
+            // so ORT does not duplicate 3.44 GB of weights in RAM during constant folding.
+            opts.setOptimizationLevel(
+                if (isLargeExternalModel || lowRamMode) {
+                    OrtSession.SessionOptions.OptLevel.BASIC_OPT
+                } else {
+                    OrtSession.SessionOptions.OptLevel.ALL_OPT
+                }
+            )
+            opts.setIntraOpNumThreads(cpuThreads)
+            if (isLargeExternalModel || lowRamMode) {
+                opts.setCPUArenaAllocator(false)
+                opts.setMemoryPatternOptimization(false)
+            }
             return env.createSession(modelFile.absolutePath, opts)
         }
     }

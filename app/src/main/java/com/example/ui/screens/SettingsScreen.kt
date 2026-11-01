@@ -412,7 +412,7 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                val targetPipelineBytes = 2L * 1024L * 1024L * 1024L
+                val targetPipelineBytes = 5L * 1024L * 1024L * 1024L
                 val progress = (metrics.totalModelBytes.toFloat() / targetPipelineBytes.toFloat())
                     .coerceIn(0f, 1f)
 
@@ -690,19 +690,29 @@ fun SettingsScreen(
             text = {
                 Text(
                     if (isTamil) {
-                        "உங்கள் மொபைலில் ஒரு Folder-ல் (உதாரணம்: Download/AI_Models) கீழ்கண்ட 4 .onnx ஃபைல்களைச் சேமிக்கவும்:\n\n" +
+                        "உங்கள் மொபைலில் ஒரு Folder-ல் கீழ்கண்ட .onnx ஃபைல்களைச் சேமிக்கவும்:\n\n" +
+                            "Image Generation (4 மாடல்கள்):\n" +
                             "1. text_encoder.onnx\n" +
-                            "2. unet.onnx\n" +
+                            "2. unet.onnx (அல்லது model.onnx + weights.pb)\n" +
                             "3. vae_decoder.onnx\n" +
                             "4. vae_encoder.onnx\n\n" +
-                            "பின்னர் Models பக்கத்தில் 'One-Touch Folder Upload' பட்டனைத் தொட்டால் 4 மாடல்களும் தானாகவே ஏற்றப்படும்."
+                            "Face Swap (3 மாடல்கள் - விருப்பம்):\n" +
+                            "5. det_10g.onnx\n" +
+                            "6. w600k_r50.onnx\n" +
+                            "7. inswapper_128.onnx (அல்லது hyperswap_1b_256.onnx)\n\n" +
+                            "பின்னர் Models பக்கத்தில் 'One-Touch Folder Upload' பட்டனைத் தொட்டால் அனைத்தும் தானாகவே ஏற்றப்படும்."
                     } else {
-                        "Save the 4 ONNX model files inside one folder on your phone (e.g. Download/AI_Models):\n\n" +
+                        "Save your .onnx model files inside a folder on your phone:\n\n" +
+                            "Core Image Generation (4 Models):\n" +
                             "1. text_encoder.onnx\n" +
-                            "2. unet.onnx\n" +
+                            "2. unet.onnx (or model.onnx + weights.pb)\n" +
                             "3. vae_decoder.onnx\n" +
                             "4. vae_encoder.onnx\n\n" +
-                            "Then open the Models tab and tap 'One-Touch Folder Upload' to auto-import all models at once."
+                            "Face Swap Add-On (3 Models - Optional):\n" +
+                            "5. det_10g.onnx\n" +
+                            "6. w600k_r50.onnx\n" +
+                            "7. inswapper_128.onnx (or hyperswap_1b_256.onnx)\n\n" +
+                            "Then open the Models tab and tap 'One-Touch Folder Upload' to auto-import everything at once."
                     }
                 )
             },

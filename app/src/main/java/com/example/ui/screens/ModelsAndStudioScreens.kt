@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,8 +25,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AddPhotoAlternate
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
@@ -43,7 +40,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
@@ -61,11 +57,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.ai.DiffusionModelSlot
+import com.example.ai.ModelSlotStatus
 import com.example.ai.OnnxModelManager
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.data.AppPreferencesState
 import com.example.data.GeneratedCreation
-import com.example.ui.ActiveScreen
 import com.example.ui.components.CircularGlowIconButton
 import com.example.ui.components.FrostedGlassCard
 import com.example.ui.theme.DeepPlumText
@@ -117,7 +113,7 @@ fun ModelsTabScreen(
                 style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold)
             )
 
-            // One-Touch Folder Upload + Phase 3 ONNX Verification Card
+            // One-Touch Folder Upload + ONNX Verification Card
             FrostedGlassCard(darkTheme = darkTheme) {
                 Text(
                     text = if (isTamil) {
@@ -131,9 +127,9 @@ fun ModelsTabScreen(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = if (isTamil) {
-                        "மொபைலில் ஒரே Folder-ல் சேமித்த 4 .onnx மாடல்களையும் (text_encoder, unet, vae_decoder, vae_encoder) ஒரே கிளிக்கில் தானாக அடையாளம் கண்டு ஏற்றும்."
+                        "ஒரே Folder-ல் சேமித்த Image Generation 4 .onnx மாடல்களையும் + Face Swap 3 .onnx மாடல்களையும் (det_10g, w600k_r50, inswapper_128 / hyperswap) தானாக அடையாளம் கண்டு ஏற்றும்."
                     } else {
-                        "Select the folder containing your downloaded .onnx models (text_encoder, unet, vae_decoder, vae_encoder) to import all slots automatically."
+                        "Select your folder containing Diffusion .onnx models (text_encoder, unet, vae_decoder, vae_encoder) and/or Face Swap .onnx models (det_10g, w600k_r50, inswapper_128 / hyperswap) to import automatically."
                     },
                     color = subColor,
                     style = MaterialTheme.typography.bodyMedium
@@ -183,7 +179,7 @@ fun ModelsTabScreen(
                     )
                 }
 
-                if (metrics.installedCount > 0) {
+                if (metrics.totalInstalledCount > 0) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -232,81 +228,142 @@ fun ModelsTabScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Installed: ${metrics.installedCount}/4 • Disk: ${OnnxModelManager.formatBytes(metrics.totalModelBytes)} • Free Space: ${OnnxModelManager.formatBytes(metrics.deviceFreeBytes)}",
+                    text = "Core AI: ${metrics.installedCount}/4 • Face Swap: ${metrics.faceSwapInstalledCount}/3 • Disk: ${OnnxModelManager.formatBytes(metrics.totalModelBytes)} • Free: ${OnnxModelManager.formatBytes(metrics.deviceFreeBytes)}",
                     color = subColor,
                     style = MaterialTheme.typography.labelLarge
                 )
             }
 
-            // 4 Individual Model Slots
-            metrics.slots.forEach { slotStatus ->
-                val slot = slotStatus.slot
-                FrostedGlassCard(darkTheme = darkTheme) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(
-                            imageVector = if (slotStatus.isInstalled) Icons.Filled.CheckCircle else Icons.Filled.CloudDownload,
-                            contentDescription = null,
-                            tint = if (slotStatus.isInstalled) NeonReadyGreen else SoftAmberStatus,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = if (isTamil) slot.titleTa else slot.titleEn,
-                                color = textColor,
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                            )
-                            Text(
-                                text = "${slot.canonicalFileName} • ${
-                                    if (slotStatus.isInstalled) {
-                                        OnnxModelManager.formatBytes(slotStatus.totalBytes)
-                                    } else if (isTamil) {
-                                        "இன்னும் சேர்க்கப்படவில்லை"
-                                    } else {
-                                        "Not uploaded yet"
-                                    }
-                                }",
-                                color = subColor,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Text(
-                                text = if (isTamil) slot.descriptionTa else slot.descriptionEn,
-                                color = subColor.copy(alpha = 0.85f),
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
+            // Section 1: Core Diffusion Models (4)
+            Text(
+                text = if (isTamil) {
+                    "Image Generation மாடல்கள் (${metrics.installedCount}/4)"
+                } else {
+                    "Core Image Generation Models (${metrics.installedCount}/4)"
+                },
+                color = textColor,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
+            )
 
-                        IconButton(
-                            onClick = { onSingleSlotUpload(slot) },
-                            modifier = Modifier.testTag("upload_slot_${slot.folderHint}")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.FileOpen,
-                                contentDescription = "Select ${slot.canonicalFileName}",
-                                tint = PurpleActionEnd
-                            )
-                        }
+            metrics.diffusionSlots.forEach { slotStatus ->
+                ModelSlotItemCard(
+                    slotStatus = slotStatus,
+                    isTamil = isTamil,
+                    darkTheme = darkTheme,
+                    textColor = textColor,
+                    subColor = subColor,
+                    onSingleSlotUpload = onSingleSlotUpload,
+                    onDeleteSlot = onDeleteSlot
+                )
+            }
 
-                        if (slotStatus.isInstalled) {
-                            IconButton(
-                                onClick = { onDeleteSlot(slot) },
-                                modifier = Modifier.testTag("delete_slot_${slot.folderHint}")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.DeleteOutline,
-                                    contentDescription = "Delete ${slot.canonicalFileName}",
-                                    tint = Color(0xFFE53935)
-                                )
-                            }
-                        }
-                    }
-                }
+            // Section 2: Face Swap Add-On Models (3)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (isTamil) {
+                    "Face Swap மாடல்கள் (${metrics.faceSwapInstalledCount}/3 • Optional)"
+                } else {
+                    "Face Swap Add-On Models (${metrics.faceSwapInstalledCount}/3 • Optional)"
+                },
+                color = textColor,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
+            )
+
+            metrics.faceSwapSlots.forEach { slotStatus ->
+                ModelSlotItemCard(
+                    slotStatus = slotStatus,
+                    isTamil = isTamil,
+                    darkTheme = darkTheme,
+                    textColor = textColor,
+                    subColor = subColor,
+                    onSingleSlotUpload = onSingleSlotUpload,
+                    onDeleteSlot = onDeleteSlot
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun ModelSlotItemCard(
+    slotStatus: ModelSlotStatus,
+    isTamil: Boolean,
+    darkTheme: Boolean,
+    textColor: Color,
+    subColor: Color,
+    onSingleSlotUpload: (DiffusionModelSlot) -> Unit,
+    onDeleteSlot: (DiffusionModelSlot) -> Unit
+) {
+    val slot = slotStatus.slot
+    val displayFileName = if (slotStatus.isInstalled && slotStatus.sourceFileLabel.isNotBlank()) {
+        slotStatus.sourceFileLabel
+    } else {
+        slot.canonicalFileName
+    }
+
+    FrostedGlassCard(darkTheme = darkTheme) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(
+                imageVector = if (slotStatus.isInstalled) Icons.Filled.CheckCircle else Icons.Filled.CloudDownload,
+                contentDescription = null,
+                tint = if (slotStatus.isInstalled) NeonReadyGreen else SoftAmberStatus,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isTamil) slot.titleTa else slot.titleEn,
+                    color = textColor,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                Text(
+                    text = "$displayFileName • ${
+                        if (slotStatus.isInstalled) {
+                            OnnxModelManager.formatBytes(slotStatus.totalBytes)
+                        } else if (isTamil) {
+                            "இன்னும் சேர்க்கப்படவில்லை"
+                        } else {
+                            "Not uploaded yet"
+                        }
+                    }",
+                    color = subColor,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = if (isTamil) slot.descriptionTa else slot.descriptionEn,
+                    color = subColor.copy(alpha = 0.85f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+
+            IconButton(
+                onClick = { onSingleSlotUpload(slot) },
+                modifier = Modifier.testTag("upload_slot_${slot.folderHint}")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.FileOpen,
+                    contentDescription = "Select ${slot.canonicalFileName}",
+                    tint = PurpleActionEnd
+                )
+            }
+
+            if (slotStatus.isInstalled) {
+                IconButton(
+                    onClick = { onDeleteSlot(slot) },
+                    modifier = Modifier.testTag("delete_slot_${slot.folderHint}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.DeleteOutline,
+                        contentDescription = "Delete ${slot.canonicalFileName}",
+                        tint = Color(0xFFE53935)
+                    )
+                }
+            }
         }
     }
 }
@@ -511,189 +568,6 @@ fun CreationsCollectionScreen(
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
-        }
-    }
-}
-
-@Composable
-fun StudioWorkspaceScreen(
-    screen: ActiveScreen,
-    preferences: AppPreferencesState,
-    metrics: RealDeviceAndModelMetrics,
-    promptDraft: String,
-    selectedPhotoUri: Uri?,
-    onPromptChange: (String) -> Unit,
-    onPickPhoto: () -> Unit,
-    onOpenModelsTab: () -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    BackHandler { onBack() }
-
-    val isTamil = preferences.isTamil
-    val darkTheme = preferences.darkTheme
-    val textColor = if (darkTheme) Color.White else DeepPlumText
-    val subColor = if (darkTheme) Color(0xFFE1C9F7) else Color(0xFF4F376E)
-
-    val title = when (screen) {
-        ActiveScreen.IMAGE_TO_IMAGE -> "Image to Image"
-        ActiveScreen.CHARACTER_STUDIO -> "Character Studio"
-        ActiveScreen.FACE_SWAP -> "Face Swap"
-        ActiveScreen.IMAGE_EDITOR -> "Image Editor"
-        else -> "Studio"
-    }
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier
-            .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.statusBars)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
-    ) {
-        Column(
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .widthIn(max = 600.dp)
-                .padding(vertical = 10.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                CircularGlowIconButton(
-                    onClick = onBack,
-                    contentDescription = "Back to Home",
-                    testTag = "workspace_back_button"
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Color.White
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = title,
-                        color = textColor,
-                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Text(
-                        text = "${preferences.resolution} • ${preferences.inferenceMode}",
-                        color = subColor,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-
-            FrostedGlassCard(darkTheme = darkTheme) {
-                Text(
-                    text = if (isTamil) "Reference புகைப்படம்" else "Reference Photo",
-                    color = textColor,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                if (selectedPhotoUri != null) {
-                    AsyncImage(
-                        model = selectedPhotoUri,
-                        contentDescription = "Selected photo",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(190.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Brush.horizontalGradient(listOf(PurpleActionStart, PurpleActionEnd)))
-                        .clickable(onClick = onPickPhoto)
-                        .padding(vertical = 11.dp)
-                        .testTag("pick_reference_photo_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.AddPhotoAlternate,
-                        contentDescription = null,
-                        tint = Color.White
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (isTamil) "படம் தேர்வு செய்க" else "Choose Photo from Gallery",
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                    )
-                }
-            }
-
-            FrostedGlassCard(darkTheme = darkTheme) {
-                Text(
-                    text = if (isTamil) "Prompt (தமிழ் / English)" else "Creative Prompt (Tamil / English)",
-                    color = textColor,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = promptDraft,
-                    onValueChange = onPromptChange,
-                    placeholder = {
-                        Text(
-                            if (isTamil) {
-                                "உதாரணம்: அழகான பட்டுப்புடவை அணிந்த பெண், இயற்கை ஒளி..."
-                            } else {
-                                "e.g., Cinematic portrait in silk saree, soft studio bokeh lighting..."
-                            }
-                        )
-                    },
-                    minLines = 3,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("prompt_input_field")
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-
-                val modelsReady = metrics.isAllFourReady
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(Brush.horizontalGradient(listOf(PinkGlowStart, PinkGlowEnd)))
-                        .border(1.2.dp, Color.White, RoundedCornerShape(20.dp))
-                        .clickable {
-                            if (!modelsReady) {
-                                onOpenModelsTab()
-                            }
-                        }
-                        .padding(vertical = 13.dp, horizontal = 14.dp)
-                        .testTag("workspace_primary_action_button")
-                ) {
-                    Icon(
-                        imageVector = if (modelsReady) Icons.Filled.AutoAwesome else Icons.Filled.FolderSpecial,
-                        contentDescription = null,
-                        tint = Color.White
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (modelsReady) {
-                            if (isTamil) "Phase 6-ல் இக்கட்டமைப்பு இணையும்" else "Scheduled in Phase 6"
-                        } else {
-                            if (isTamil) "4 ONNX மாடல்களையும் ஏற்றவும் (${metrics.installedCount}/4)" else "Upload All 4 ONNX Models (${metrics.installedCount}/4)"
-                        },
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                }
-            }
         }
     }
 }

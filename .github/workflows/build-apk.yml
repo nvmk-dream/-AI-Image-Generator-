@@ -38,22 +38,15 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      - name: Prepare debug keystore and .env fallback
+      - name: Prepare deterministic debug keystore and .env fallback
         run: |
           if [ -s debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
             tr -d '\r\n ' < debug.keystore.base64 | base64 -d > debug.keystore
           fi
           if [ ! -s debug.keystore ]; then
             rm -f debug.keystore
-            keytool -genkeypair \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
+            CI_KEYSTORE_B64="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"
+            printf '%s' "$CI_KEYSTORE_B64" | base64 -d > debug.keystore
           fi
           if [ ! -f .env ] && [ -f .env.example ]; then
             cp .env.example .env

@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ai.DiffusionModelSlot
@@ -33,15 +34,25 @@ import com.example.ui.AppViewModel
 import com.example.ui.BottomNavTab
 import com.example.ui.components.DreamyHeartBackground
 import com.example.ui.components.GlassBottomNavBar
+import com.example.ui.screens.CharacterStudioScreen
 import com.example.ui.screens.ContentSafetySettingsScreen
 import com.example.ui.screens.CreationsCollectionScreen
+import com.example.ui.screens.FaceSwapScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.ImageEditorScreen
 import com.example.ui.screens.ImageToImageScreen
 import com.example.ui.screens.ModelsTabScreen
 import com.example.ui.screens.SettingsScreen
-import com.example.ui.screens.StudioWorkspaceScreen
 import com.example.ui.screens.TextToImageScreen
 import com.example.ui.theme.MyApplicationTheme
+
+private enum class PhotoPickTarget {
+    IMG2IMG_REFERENCE,
+    CHARACTER_REFERENCE,
+    FACESWAP_SOURCE,
+    FACESWAP_TARGET,
+    IMAGE_EDITOR_SOURCE
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,6 +72,7 @@ fun ImageGeneratorRoot(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingSlotForSingleImport by remember { mutableStateOf(DiffusionModelSlot.TEXT_ENCODER) }
+    var photoPickTarget by remember { mutableStateOf(PhotoPickTarget.IMG2IMG_REFERENCE) }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -80,7 +92,10 @@ fun ImageGeneratorRoot(
         contract = ActivityResultContracts.OpenDocument()
     ) { fileUri ->
         if (fileUri != null) {
-            appViewModel.importSingleSlot(fileUri, pendingSlotForSingleImport)
+            val fileName = runCatching {
+                DocumentFile.fromSingleUri(context, fileUri)?.name
+            }.getOrNull()
+            appViewModel.importSingleSlot(fileUri, pendingSlotForSingleImport, fileName)
         }
     }
 
@@ -88,8 +103,21 @@ fun ImageGeneratorRoot(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { photoUri ->
         if (photoUri != null) {
-            appViewModel.updateSelectedInputPhoto(photoUri)
+            when (photoPickTarget) {
+                PhotoPickTarget.IMG2IMG_REFERENCE -> appViewModel.updateSelectedInputPhoto(photoUri)
+                PhotoPickTarget.CHARACTER_REFERENCE -> appViewModel.setPendingCharacterPhotoUri(photoUri)
+                PhotoPickTarget.FACESWAP_SOURCE -> appViewModel.setFaceSwapSourceUri(photoUri)
+                PhotoPickTarget.FACESWAP_TARGET -> appViewModel.setFaceSwapTargetUri(photoUri)
+                PhotoPickTarget.IMAGE_EDITOR_SOURCE -> appViewModel.setEditorImageUri(photoUri)
+            }
         }
+    }
+
+    fun launchPhotoPicker(target: PhotoPickTarget) {
+        photoPickTarget = target
+        photoPickerLauncher.launch(
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        )
     }
 
     LaunchedEffect(uiState.statusToastMessage) {
@@ -263,9 +291,7 @@ fun ImageGeneratorRoot(
                                 latestSourcePreviewPath = uiState.latestImg2ImgSourcePath,
                                 errorMessage = uiState.generationErrorMessage,
                                 onPickReferencePhoto = {
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
+                                    launchPhotoPicker(PhotoPickTarget.IMG2IMG_REFERENCE)
                                 },
                                 onUserPromptChange = appViewModel::updateUserImagePrompt,
                                 onGenerateImg2Img = appViewModel::generateOfflineImageToImage,
@@ -278,6 +304,83 @@ fun ImageGeneratorRoot(
                                 onOpenContentSafetySettings = {
                                     appViewModel.navigateToScreen(ActiveScreen.CONTENT_SAFETY_SETTINGS)
                                 },
+                                onBack = { appViewModel.navigateBackToHome() }
+                            )
+
+                            ActiveScreen.CHARACTER_STUDIO -> CharacterStudioScreen(
+                                preferences = uiState.preferences,
+                                metrics = uiState.metrics,
+                                characters = uiState.characters,
+                                selectedCharacterId = uiState.selectedCharacterId,
+                                pendingCharacterPhotoUri = uiState.pendingCharacterPhotoUri,
+                                isGenerating = uiState.isGenerating,
+                                progress = uiState.generationProgress,
+                                latestCharacterCreation = uiState.latestCharacterCreation,
+                                errorMessage = uiState.generationErrorMessage,
+                                onSelectCharacter = appViewModel::selectCharacter,
+                                onPickCharacterPhoto = {
+                                    launchPhotoPicker(PhotoPickTarget.CHARACTER_REFERENCE)
+                                },
+                                onClearCharacterPhoto = {
+                                    appViewModel.setPendingCharacterPhotoUri(null)
+                                },
+                                onSaveCharacter = appViewModel::saveCharacterProfile,
+                                onDeleteCharacter = appViewModel::deleteCharacterProfile,
+                                onGenerateCharacterScene = appViewModel::generateCharacterScene,
+                                onCancelGeneration = appViewModel::cancelGeneration,
+                                onExportToGallery = appViewModel::exportCreationToGallery,
+                                onToggleFavorite = appViewModel::toggleFavoriteCreation,
+                                onOpenModelsTab = {
+                                    appViewModel.selectBottomTab(BottomNavTab.MODELS)
+                                },
+                                onOpenContentSafetySettings = {
+                                    appViewModel.navigateToScreen(ActiveScreen.CONTENT_SAFETY_SETTINGS)
+                                },
+                                onBack = { appViewModel.navigateBackToHome() }
+                            )
+
+                            ActiveScreen.FACE_SWAP -> FaceSwapScreen(
+                                preferences = uiState.preferences,
+                                metrics = uiState.metrics,
+                                sourceFaceUri = uiState.faceSwapSourceUri,
+                                targetImageUri = uiState.faceSwapTargetUri,
+                                targetFallbackCreation = uiState.latestGeneratedCreation,
+                                useLatestCreationAsTarget = uiState.useLatestCreationAsFaceSwapTarget,
+                                isSwapping = uiState.isGenerating,
+                                progress = uiState.generationProgress,
+                                latestFaceSwapCreation = uiState.latestFaceSwapCreation,
+                                latestFaceSwapTargetPreviewPath = uiState.latestFaceSwapTargetPreviewPath,
+                                errorMessage = uiState.generationErrorMessage,
+                                onPickSourceFace = {
+                                    launchPhotoPicker(PhotoPickTarget.FACESWAP_SOURCE)
+                                },
+                                onPickTargetPhoto = {
+                                    launchPhotoPicker(PhotoPickTarget.FACESWAP_TARGET)
+                                },
+                                onUseLatestCreationAsTarget = appViewModel::useLatestCreationAsFaceSwapTarget,
+                                onRunFaceSwap = appViewModel::runOfflineFaceSwap,
+                                onCancelSwap = appViewModel::cancelGeneration,
+                                onExportToGallery = appViewModel::exportCreationToGallery,
+                                onToggleFavorite = appViewModel::toggleFavoriteCreation,
+                                onOpenModelsTab = {
+                                    appViewModel.selectBottomTab(BottomNavTab.MODELS)
+                                },
+                                onBack = { appViewModel.navigateBackToHome() }
+                            )
+
+                            ActiveScreen.IMAGE_EDITOR -> ImageEditorScreen(
+                                preferences = uiState.preferences,
+                                editorImageUri = uiState.editorImageUri,
+                                latestCreation = uiState.latestGeneratedCreation,
+                                useLatestCreationInEditor = uiState.useLatestCreationInEditor,
+                                latestEditedCreation = uiState.latestEditedCreation,
+                                isSavingEdit = uiState.isSavingEdit,
+                                onPickEditorPhoto = {
+                                    launchPhotoPicker(PhotoPickTarget.IMAGE_EDITOR_SOURCE)
+                                },
+                                onLoadLatestCreation = appViewModel::loadLatestCreationInEditor,
+                                onSaveEditedPhoto = appViewModel::saveEditedPhoto,
+                                onExportToGallery = appViewModel::exportCreationToGallery,
                                 onBack = { appViewModel.navigateBackToHome() }
                             )
 
@@ -299,24 +402,6 @@ fun ImageGeneratorRoot(
                                 onToggleFavorite = appViewModel::toggleFavoriteCreation,
                                 onSaveToGallery = appViewModel::exportCreationToGallery,
                                 onDeleteCreation = appViewModel::deleteCreation
-                            )
-
-                            else -> StudioWorkspaceScreen(
-                                screen = screen,
-                                preferences = uiState.preferences,
-                                metrics = uiState.metrics,
-                                promptDraft = uiState.userPromptInput,
-                                selectedPhotoUri = uiState.selectedInputPhotoUri,
-                                onPromptChange = appViewModel::updateUserImagePrompt,
-                                onPickPhoto = {
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
-                                },
-                                onOpenModelsTab = {
-                                    appViewModel.selectBottomTab(BottomNavTab.MODELS)
-                                },
-                                onBack = { appViewModel.navigateBackToHome() }
                             )
                         }
                     }

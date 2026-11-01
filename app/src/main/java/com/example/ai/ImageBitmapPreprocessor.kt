@@ -23,8 +23,17 @@ object ImageBitmapPreprocessor {
         targetWidth: Int,
         targetHeight: Int
     ): Bitmap {
+        val localFile = if (uri.scheme == "file" && !uri.path.isNullOrBlank()) {
+            File(uri.path!!)
+        } else {
+            null
+        }
         val decoded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val source = ImageDecoder.createSource(context.contentResolver, uri)
+            val source = if (localFile != null && localFile.exists()) {
+                ImageDecoder.createSource(localFile)
+            } else {
+                ImageDecoder.createSource(context.contentResolver, uri)
+            }
             ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
                 decoder.isMutableRequired = false
@@ -42,8 +51,12 @@ object ImageBitmapPreprocessor {
             }
         } else {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, bounds)
+            if (localFile != null && localFile.exists()) {
+                BitmapFactory.decodeFile(localFile.absolutePath, bounds)
+            } else {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream, null, bounds)
+                }
             }
             var sampleSize = 1
             val minDim = min(bounds.outWidth.coerceAtLeast(1), bounds.outHeight.coerceAtLeast(1))
@@ -55,9 +68,14 @@ object ImageBitmapPreprocessor {
                 inSampleSize = sampleSize
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, decodeOpts)
-            } ?: error("Unable to open selected reference image.")
+            if (localFile != null && localFile.exists()) {
+                BitmapFactory.decodeFile(localFile.absolutePath, decodeOpts)
+                    ?: error("Unable to decode saved reference image.")
+            } else {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream, null, decodeOpts)
+                } ?: error("Unable to open selected reference image.")
+            }
         }
 
         val cropped = centerCropAndResize(decoded, targetWidth, targetHeight)

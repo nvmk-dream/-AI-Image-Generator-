@@ -140,4 +140,143 @@ class ExampleUnitTest {
         assertTrue(abs(nhwc[0] - (-1.0f)) < 1e-4f)
         assertTrue(abs(nhwc[3] - 1.0f) < 1e-4f)
     }
+
+    @Test
+    fun phase6ModelSlotMatcher_detectsDiffusionAndFaceSwapRepoModels() {
+        assertTrue(
+            com.example.ai.OnnxModelManager.matchesSlot(
+                com.example.ai.DiffusionModelSlot.TEXT_ENCODER,
+                "model.onnx",
+                "text_encoder"
+            )
+        )
+        assertTrue(
+            com.example.ai.OnnxModelManager.matchesSlot(
+                com.example.ai.DiffusionModelSlot.FACE_DETECTOR,
+                "det_10g.onnx",
+                "models"
+            )
+        )
+        assertTrue(
+            com.example.ai.OnnxModelManager.matchesSlot(
+                com.example.ai.DiffusionModelSlot.FACE_RECOGNIZER,
+                "w600k_r50.onnx",
+                "models"
+            )
+        )
+        assertTrue(
+            com.example.ai.OnnxModelManager.matchesSlot(
+                com.example.ai.DiffusionModelSlot.FACE_SWAPPER,
+                "inswapper_128.onnx",
+                "models"
+            )
+        )
+        assertTrue(
+            com.example.ai.OnnxModelManager.matchesSlot(
+                com.example.ai.DiffusionModelSlot.FACE_SWAPPER,
+                "hyperswap_1b_256.onnx",
+                "models"
+            )
+        )
+    }
+
+    @Test
+    fun phase6CharacterProfileAndEditorMatrix_produceValidOutputs() {
+        val charProfile = com.example.data.CharacterProfile(
+            id = "c1",
+            name = "Ananya",
+            appearancePrompt = "young Indian woman, curly black hair",
+            fixedSeed = 48291037L
+        )
+        assertEquals(
+            "young Indian woman, curly black hair, wearing golden saree at temple",
+            charProfile.buildCharacterScenePrompt("wearing golden saree at temple")
+        )
+
+        val defaultMatrix = com.example.ai.OfflineImageEditorEngine.buildColorMatrixValues(
+            com.example.ai.ImageEditorAdjustments()
+        )
+        assertEquals(20, defaultMatrix.size)
+        // Identity diagonal = 1.0f, translations = 0.0f
+        assertTrue(abs(defaultMatrix[0] - 1.0f) < 1e-4f)
+        assertTrue(abs(defaultMatrix[6] - 1.0f) < 1e-4f)
+        assertTrue(abs(defaultMatrix[12] - 1.0f) < 1e-4f)
+        assertTrue(abs(defaultMatrix[4]) < 1e-4f)
+    }
+
+    @Test
+    fun flatFolderModelOnnxAndWeightsPb_matchesAllFourSlotsWithoutDuplication() {
+        val parent = "image generator"
+        val candidates = listOf(
+            com.example.ai.OnnxModelManager.CandidateModelFile(0, "text_encoder.onnx", parent),
+            com.example.ai.OnnxModelManager.CandidateModelFile(1, "model.onnx", parent),
+            com.example.ai.OnnxModelManager.CandidateModelFile(2, "vae_decoder.onnx", parent),
+            com.example.ai.OnnxModelManager.CandidateModelFile(3, "vae_encoder.onnx", parent)
+        )
+        val siblings = mapOf(
+            parent to listOf(
+                "text_encoder.onnx",
+                "model.onnx",
+                "weights.pb",
+                "vae_decoder.onnx",
+                "vae_encoder.onnx",
+                "scheduler_config.json",
+                "vocab.json",
+                "merges.txt"
+            )
+        )
+
+        val resolved = com.example.ai.OnnxModelManager.resolveFolderSlotMatches(candidates, siblings)
+        assertEquals(4, resolved.size)
+        assertEquals(0, resolved[com.example.ai.DiffusionModelSlot.TEXT_ENCODER])
+        assertEquals(1, resolved[com.example.ai.DiffusionModelSlot.UNET])
+        assertEquals(2, resolved[com.example.ai.DiffusionModelSlot.VAE_DECODER])
+        assertEquals(3, resolved[com.example.ai.DiffusionModelSlot.VAE_ENCODER])
+
+        // Verify weights.pb is ONLY copied for the 1.09 MB model.onnx shell that references it,
+        // and NEVER duplicated into 492 MB text_encoder, 198 MB vae_decoder, or 136 MB vae_encoder!
+        val tmpShell = java.io.File.createTempFile("unet_shell_", ".onnx")
+        try {
+            tmpShell.writeBytes("onnx_proto_header_location_weights.pb_tensor_raw".toByteArray())
+            assertTrue(
+                com.example.ai.OnnxModelManager.shouldCopyCompanionWeight(
+                    onnxFileName = "model.onnx",
+                    onnxSizeBytes = 1_140_000L,
+                    companionFileName = "weights.pb",
+                    onnxFileForRefScan = tmpShell
+                )
+            )
+        } finally {
+            tmpShell.delete()
+        }
+
+        assertFalse(
+            com.example.ai.OnnxModelManager.shouldCopyCompanionWeight(
+                onnxFileName = "text_encoder.onnx",
+                onnxSizeBytes = 492_540_000L,
+                companionFileName = "weights.pb"
+            )
+        )
+        assertFalse(
+            com.example.ai.OnnxModelManager.shouldCopyCompanionWeight(
+                onnxFileName = "vae_decoder.onnx",
+                onnxSizeBytes = 198_080_000L,
+                companionFileName = "weights.pb"
+            )
+        )
+        assertFalse(
+            com.example.ai.OnnxModelManager.shouldCopyCompanionWeight(
+                onnxFileName = "vae_encoder.onnx",
+                onnxSizeBytes = 136_760_000L,
+                companionFileName = "weights.pb"
+            )
+        )
+        assertFalse(
+            com.example.ai.OnnxModelManager.shouldCopyCompanionWeight(
+                onnxFileName = "det_10g.onnx",
+                onnxSizeBytes = 16_900_000L,
+                companionFileName = "weights.pb"
+            )
+        )
+    }
 }
