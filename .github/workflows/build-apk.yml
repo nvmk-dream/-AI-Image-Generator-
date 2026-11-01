@@ -40,8 +40,20 @@ jobs:
 
       - name: Prepare debug keystore and .env fallback
         run: |
-          if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
+          if [ -s debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
             tr -d '\r\n ' < debug.keystore.base64 | base64 -d > debug.keystore
+          fi
+          if [ ! -s debug.keystore ]; then
+            rm -f debug.keystore
+            keytool -genkeypair \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
           if [ ! -f .env ] && [ -f .env.example ]; then
             cp .env.example .env
