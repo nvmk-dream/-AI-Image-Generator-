@@ -279,4 +279,79 @@ class ExampleUnitTest {
             )
         )
     }
+
+    @Test
+    fun protobufExternalDataScanner_detectsWeightsPbAndModelOnnxDataAndMissingStatus() {
+        val dir = java.nio.file.Files.createTempDirectory("onnx_ext_test_").toFile()
+        try {
+            val unetOnnx = java.io.File(dir, "model.onnx")
+            val locationBytes = "weights.pb".toByteArray(Charsets.UTF_8)
+            val protoPayload = java.io.ByteArrayOutputStream().apply {
+                write("onnx_header_padding_".toByteArray(Charsets.UTF_8))
+                write(byteArrayOf(0x0A, 0x08))
+                write("location".toByteArray(Charsets.UTF_8))
+                write(byteArrayOf(0x12, locationBytes.size.toByte()))
+                write(locationBytes)
+                write(ByteArray(2048))
+            }.toByteArray()
+            unetOnnx.writeBytes(protoPayload)
+
+            val extracted = com.example.ai.OnnxModelManager.extractExternalDataLocations(unetOnnx)
+            assertEquals(listOf("weights.pb"), extracted)
+
+            // Before weights.pb is added -> reported as missing!
+            assertEquals(
+                listOf("weights.pb"),
+                com.example.ai.OnnxModelManager.findMissingCompanionFiles(unetOnnx)
+            )
+
+            // Add valid companion weights.pb (>= 64 KB) -> no longer missing!
+            val weightsFile = java.io.File(dir, "weights.pb")
+            weightsFile.writeBytes(ByteArray(80 * 1024) { 1 })
+            assertTrue(com.example.ai.OnnxModelManager.findMissingCompanionFiles(unetOnnx).isEmpty())
+
+            // Even if an .onnx graph is > 15 MB (e.g. 20 MB quantized graph), explicit protobuf external_data is honored
+            assertTrue(
+                com.example.ai.OnnxModelManager.shouldCopyCompanionWeight(
+                    onnxFileName = "unet.onnx",
+                    onnxSizeBytes = 20_000_000L,
+                    companionFileName = "weights (1).pb",
+                    onnxFileForRefScan = unetOnnx
+                )
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun browserDuplicateNormalizerAndDownloadCatalog_haveValidEntries() {
+        assertEquals(
+            "weights.pb",
+            com.example.ai.OnnxModelManager.normalizeBrowserDuplicateName("weights (1).pb")
+        )
+        assertEquals(
+            "model.onnx.data",
+            com.example.ai.OnnxModelManager.normalizeBrowserDuplicateName("model.onnx (1).data")
+        )
+        assertEquals(
+            "model.onnx.data",
+            com.example.ai.OnnxModelManager.normalizeBrowserDuplicateName("model (2).onnx.data")
+        )
+        assertEquals(
+            "unet.onnx",
+            com.example.ai.OnnxModelManager.normalizeBrowserDuplicateName("unet (1).onnx")
+        )
+
+        val translated = OfflineTamilPromptTranslator.normalizeForClip("அழகான பட்டுப்புடவை அணிந்த பெண்")
+        assertTrue(translated.contains("wearing"))
+        assertTrue(translated.contains("traditional silk saree"))
+
+        val allLinks = com.example.ai.OnnxModelDownloadCatalog.groups.flatMap { it.links }
+        assertTrue(allLinks.size >= 7)
+        assertTrue(allLinks.all { it.url.startsWith("https://huggingface.co/") })
+        assertTrue(allLinks.any { it.url.endsWith("/unet/model.onnx.data") })
+        assertTrue(allLinks.any { it.url.endsWith("/unet/weights.pb") })
+    }
 }
+

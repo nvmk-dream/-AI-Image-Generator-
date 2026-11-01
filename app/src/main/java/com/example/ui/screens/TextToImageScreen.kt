@@ -469,14 +469,18 @@ fun TextToImageScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (modelsReady) {
-                                if (isTamil) "Generate Offline Image" else "Generate Offline Image"
-                            } else {
-                                if (isTamil) {
-                                    "முதலில் ONNX Folder ஏற்றவும் (${metrics.installedCount}/4)"
-                                } else {
-                                    "Upload ONNX Folder First (${metrics.installedCount}/4)"
+                            text = when {
+                                modelsReady -> "Generate Offline Image"
+                                metrics.incompleteSlots.isNotEmpty() -> {
+                                    val missing = metrics.incompleteSlots.first().missingCompanionFiles.firstOrNull() ?: "weights.pb"
+                                    if (isTamil) {
+                                        "UNet $missing இணைக்கவும் (${metrics.installedCount}/4)"
+                                    } else {
+                                        "Attach Missing $missing (${metrics.installedCount}/4)"
+                                    }
                                 }
+                                isTamil -> "முதலில் ONNX Folder ஏற்றவும் (${metrics.installedCount}/4)"
+                                else -> "Upload ONNX Folder First (${metrics.installedCount}/4)"
                             },
                             color = Color.White,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)

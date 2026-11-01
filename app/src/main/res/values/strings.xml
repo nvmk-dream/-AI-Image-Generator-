@@ -18,4 +18,10 @@
     <string name="cd_settings_button">Open Settings</string>
     <string name="cd_back_button">Navigate Back</string>
     <string name="cd_hero_portrait">Creative Studio Portrait Banner</string>
+    <string name="settings_onnx_downloads_title">ONNX Model Download Links</string>
+    <string name="settings_onnx_downloads_open">Download</string>
+    <string name="settings_onnx_downloads_browse">Open</string>
+    <string name="cd_copy_download_link">Copy ONNX model download link</string>
+    <string name="cd_open_download_link">Open ONNX model download link in browser</string>
+    <string name="models_attach_companion_weights">Attach External Weights File</string>
 </resources>

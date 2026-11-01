@@ -462,6 +462,10 @@ private fun OnnxStatusPill(
 
     val onnxStatusText = when {
         onnxReady -> "ONNX Runtime : Ready (${metrics.installedCount}/4)"
+        metrics.incompleteSlots.isNotEmpty() -> {
+            val missing = metrics.incompleteSlots.first().missingCompanionFiles.firstOrNull() ?: "weights.pb"
+            if (isTamil) "ONNX : $missing விடுபட்டுள்ளது (Tap)" else "ONNX : Missing $missing (Tap)"
+        }
         metrics.ortRuntimeAvailable -> if (isTamil) {
             "ONNX v${metrics.ortVersion} : மாடல் சேர்க்கவும் (${metrics.installedCount}/4)"
         } else {

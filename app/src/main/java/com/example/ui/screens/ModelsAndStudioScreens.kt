@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -84,6 +85,8 @@ fun ModelsTabScreen(
     onOneTouchFolderUpload: () -> Unit,
     onVerifyPipeline: () -> Unit,
     onSingleSlotUpload: (DiffusionModelSlot) -> Unit,
+    onAttachCompanionWeight: (DiffusionModelSlot) -> Unit = {},
+    onOpenSettingsDownloads: () -> Unit = {},
     onDeleteSlot: (DiffusionModelSlot) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -179,7 +182,7 @@ fun ModelsTabScreen(
                     )
                 }
 
-                if (metrics.totalInstalledCount > 0) {
+                if (metrics.hasAnySlotFilesOnDisk) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -207,6 +210,38 @@ fun ModelsTabScreen(
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                         )
                     }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .minimumInteractiveComponentSize()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = if (darkTheme) 0.12f else 0.65f))
+                        .border(1.dp, VibrantPinkPill.copy(alpha = 0.75f), RoundedCornerShape(16.dp))
+                        .clickable(enabled = !isImporting, onClick = onOpenSettingsDownloads)
+                        .padding(vertical = 9.dp, horizontal = 12.dp)
+                        .testTag("models_open_settings_downloads_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.CloudDownload,
+                        contentDescription = null,
+                        tint = VibrantPinkPill,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isTamil) {
+                            "ONNX மாடல் Download Links (Settings)"
+                        } else {
+                            "Get ONNX Model Download Links (Settings)"
+                        },
+                        color = textColor,
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
                 }
 
                 if (!verificationReport.isNullOrBlank()) {
@@ -253,6 +288,7 @@ fun ModelsTabScreen(
                     textColor = textColor,
                     subColor = subColor,
                     onSingleSlotUpload = onSingleSlotUpload,
+                    onAttachCompanionWeight = onAttachCompanionWeight,
                     onDeleteSlot = onDeleteSlot
                 )
             }
@@ -277,6 +313,7 @@ fun ModelsTabScreen(
                     textColor = textColor,
                     subColor = subColor,
                     onSingleSlotUpload = onSingleSlotUpload,
+                    onAttachCompanionWeight = onAttachCompanionWeight,
                     onDeleteSlot = onDeleteSlot
                 )
             }
@@ -294,73 +331,124 @@ private fun ModelSlotItemCard(
     textColor: Color,
     subColor: Color,
     onSingleSlotUpload: (DiffusionModelSlot) -> Unit,
+    onAttachCompanionWeight: (DiffusionModelSlot) -> Unit,
     onDeleteSlot: (DiffusionModelSlot) -> Unit
 ) {
     val slot = slotStatus.slot
-    val displayFileName = if (slotStatus.isInstalled && slotStatus.sourceFileLabel.isNotBlank()) {
+    val isIncomplete = slotStatus.isIncompleteExternalGraph
+    val displayFileName = if ((slotStatus.isInstalled || isIncomplete) && slotStatus.sourceFileLabel.isNotBlank()) {
         slotStatus.sourceFileLabel
     } else {
         slot.canonicalFileName
     }
 
     FrostedGlassCard(darkTheme = darkTheme) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(
-                imageVector = if (slotStatus.isInstalled) Icons.Filled.CheckCircle else Icons.Filled.CloudDownload,
-                contentDescription = null,
-                tint = if (slotStatus.isInstalled) NeonReadyGreen else SoftAmberStatus,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = if (isTamil) slot.titleTa else slot.titleEn,
-                    color = textColor,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                )
-                Text(
-                    text = "$displayFileName • ${
-                        if (slotStatus.isInstalled) {
-                            OnnxModelManager.formatBytes(slotStatus.totalBytes)
-                        } else if (isTamil) {
-                            "இன்னும் சேர்க்கப்படவில்லை"
-                        } else {
-                            "Not uploaded yet"
-                        }
-                    }",
-                    color = subColor,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Text(
-                    text = if (isTamil) slot.descriptionTa else slot.descriptionEn,
-                    color = subColor.copy(alpha = 0.85f),
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-
-            IconButton(
-                onClick = { onSingleSlotUpload(slot) },
-                modifier = Modifier.testTag("upload_slot_${slot.folderHint}")
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(
-                    imageVector = Icons.Filled.FileOpen,
-                    contentDescription = "Select ${slot.canonicalFileName}",
-                    tint = PurpleActionEnd
+                    imageVector = when {
+                        slotStatus.isInstalled -> Icons.Filled.CheckCircle
+                        isIncomplete -> Icons.Filled.WarningAmber
+                        else -> Icons.Filled.CloudDownload
+                    },
+                    contentDescription = null,
+                    tint = when {
+                        slotStatus.isInstalled -> NeonReadyGreen
+                        isIncomplete -> Color(0xFFFF6D00)
+                        else -> SoftAmberStatus
+                    },
+                    modifier = Modifier.size(24.dp)
                 )
-            }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (isTamil) slot.titleTa else slot.titleEn,
+                        color = textColor,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Text(
+                        text = when {
+                            slotStatus.isInstalled ->
+                                "$displayFileName • ${OnnxModelManager.formatBytes(slotStatus.totalBytes)}"
+                            isIncomplete -> if (isTamil) {
+                                "$displayFileName (${OnnxModelManager.formatBytes(slotStatus.sizeBytes)}) • ⚠️ ${slotStatus.missingCompanionFiles.joinToString()} விடுபட்டுள்ளது"
+                            } else {
+                                "$displayFileName (${OnnxModelManager.formatBytes(slotStatus.sizeBytes)}) • ⚠️ Missing ${slotStatus.missingCompanionFiles.joinToString()}"
+                            }
+                            isTamil -> "$displayFileName • இன்னும் சேர்க்கப்படவில்லை"
+                            else -> "$displayFileName • Not uploaded yet"
+                        },
+                        color = if (isIncomplete) Color(0xFFE65100) else subColor,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontWeight = if (isIncomplete) FontWeight.Bold else FontWeight.Normal
+                        )
+                    )
+                    Text(
+                        text = if (isTamil) slot.descriptionTa else slot.descriptionEn,
+                        color = subColor.copy(alpha = 0.85f),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
 
-            if (slotStatus.isInstalled) {
                 IconButton(
-                    onClick = { onDeleteSlot(slot) },
-                    modifier = Modifier.testTag("delete_slot_${slot.folderHint}")
+                    onClick = { onSingleSlotUpload(slot) },
+                    modifier = Modifier.testTag("upload_slot_${slot.folderHint}")
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.DeleteOutline,
-                        contentDescription = "Delete ${slot.canonicalFileName}",
-                        tint = Color(0xFFE53935)
+                        imageVector = Icons.Filled.FileOpen,
+                        contentDescription = "Select ${slot.canonicalFileName}",
+                        tint = PurpleActionEnd
+                    )
+                }
+
+                if (slotStatus.isInstalled || slotStatus.hasGraphFile) {
+                    IconButton(
+                        onClick = { onDeleteSlot(slot) },
+                        modifier = Modifier.testTag("delete_slot_${slot.folderHint}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.DeleteOutline,
+                            contentDescription = "Delete ${slot.canonicalFileName}",
+                            tint = Color(0xFFE53935)
+                        )
+                    }
+                }
+            }
+
+            if (isIncomplete) {
+                val missingName = slotStatus.missingCompanionFiles.firstOrNull() ?: "weights.pb"
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .minimumInteractiveComponentSize()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Brush.horizontalGradient(listOf(PinkGlowStart, VibrantPinkPill)))
+                        .border(1.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(14.dp))
+                        .clickable { onAttachCompanionWeight(slot) }
+                        .padding(vertical = 8.dp, horizontal = 12.dp)
+                        .testTag("attach_companion_${slot.folderHint}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.FileOpen,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isTamil) {
+                            "+ $missingName எடை ஃபைலை இணைக்கவும் (Attach)"
+                        } else {
+                            "+ Attach $missingName External Weights File"
+                        },
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                     )
                 }
             }

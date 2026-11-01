@@ -887,8 +887,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val updatedMetrics = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
             result.fold(
                 onSuccess = { imported ->
+                    val incompleteWarning = updatedMetrics.incompleteSlots.firstOrNull()?.let { inc ->
+                        " ⚠️ ${inc.slot.canonicalFileName} is missing ${inc.missingCompanionFiles.joinToString()} (See Settings → ONNX Model Download Links)."
+                    }.orEmpty()
                     val msg = if (imported.isNotEmpty()) {
-                        "Imported ${imported.size} ONNX model(s): ${imported.joinToString { it.canonicalFileName }}"
+                        "Imported ${imported.size} complete ONNX model(s): ${imported.joinToString { it.canonicalFileName }}.$incompleteWarning"
+                    } else if (incompleteWarning.isNotEmpty()) {
+                        incompleteWarning.trim()
                     } else {
                         "No matching .onnx files found in that folder."
                     }
@@ -924,17 +929,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             val result = withContext(Dispatchers.IO) {
-                modelManager.importSingleSlotFromUri(uri, slot, originalNameHint)
+                modelManager.importSingleSlotFromUri(uri, slot, originalNameHint) { prog ->
+                    transientState.update { s -> s.copy(importProgressText = prog) }
+                }
             }
             val updatedMetrics = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
             result.fold(
                 onSuccess = { bytes ->
+                    val slotState = updatedMetrics.slots.firstOrNull { it.slot == slot }
+                    val msg = if (slotState != null && slotState.isIncompleteExternalGraph) {
+                        "Saved ${originalNameHint ?: slot.canonicalFileName} (${OnnxModelManager.formatBytes(bytes)}) — now attach ${slotState.missingCompanionFiles.joinToString()}!"
+                    } else {
+                        "${originalNameHint ?: slot.canonicalFileName} ready (${OnnxModelManager.formatBytes(bytes)})"
+                    }
                     transientState.update {
                         it.copy(
                             metrics = updatedMetrics,
                             isImportingModels = false,
                             importProgressText = null,
-                            statusToastMessage = "${originalNameHint ?: slot.canonicalFileName} ready (${OnnxModelManager.formatBytes(bytes)})"
+                            statusToastMessage = msg
                         )
                     }
                 },
@@ -945,6 +958,46 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             isImportingModels = false,
                             importProgressText = null,
                             statusToastMessage = "Import error: ${err.message}"
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun importCompanionWeightForSlot(uri: Uri, slot: DiffusionModelSlot, originalNameHint: String? = null) {
+        viewModelScope.launch {
+            transientState.update {
+                it.copy(
+                    isImportingModels = true,
+                    importProgressText = "Attaching weights for ${slot.canonicalFileName}..."
+                )
+            }
+            val result = withContext(Dispatchers.IO) {
+                modelManager.importCompanionWeightForSlot(uri, slot, originalNameHint) { prog ->
+                    transientState.update { s -> s.copy(importProgressText = prog) }
+                }
+            }
+            val updatedMetrics = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
+            result.fold(
+                onSuccess = { (savedName, bytes) ->
+                    transientState.update {
+                        it.copy(
+                            metrics = updatedMetrics,
+                            isImportingModels = false,
+                            importProgressText = null,
+                            onnxVerificationReport = null,
+                            statusToastMessage = "$savedName attached (${OnnxModelManager.formatBytes(bytes)}) — ${slot.canonicalFileName} Ready!"
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    transientState.update {
+                        it.copy(
+                            metrics = updatedMetrics,
+                            isImportingModels = false,
+                            importProgressText = null,
+                            statusToastMessage = "Weights attach error: ${err.message}"
                         )
                     }
                 }

@@ -72,6 +72,7 @@ fun ImageGeneratorRoot(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingSlotForSingleImport by remember { mutableStateOf(DiffusionModelSlot.TEXT_ENCODER) }
+    var pendingSlotForCompanionImport by remember { mutableStateOf(DiffusionModelSlot.UNET) }
     var photoPickTarget by remember { mutableStateOf(PhotoPickTarget.IMG2IMG_REFERENCE) }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
@@ -96,6 +97,17 @@ fun ImageGeneratorRoot(
                 DocumentFile.fromSingleUri(context, fileUri)?.name
             }.getOrNull()
             appViewModel.importSingleSlot(fileUri, pendingSlotForSingleImport, fileName)
+        }
+    }
+
+    val companionWeightPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { fileUri ->
+        if (fileUri != null) {
+            val fileName = runCatching {
+                DocumentFile.fromSingleUri(context, fileUri)?.name
+            }.getOrNull()
+            appViewModel.importCompanionWeightForSlot(fileUri, pendingSlotForCompanionImport, fileName)
         }
     }
 
@@ -219,6 +231,13 @@ fun ImageGeneratorRoot(
                                         onSingleSlotUpload = { slot ->
                                             pendingSlotForSingleImport = slot
                                             singleModelPickerLauncher.launch(arrayOf("*/*"))
+                                        },
+                                        onAttachCompanionWeight = { slot ->
+                                            pendingSlotForCompanionImport = slot
+                                            companionWeightPickerLauncher.launch(arrayOf("*/*"))
+                                        },
+                                        onOpenSettingsDownloads = {
+                                            appViewModel.navigateToScreen(ActiveScreen.SETTINGS)
                                         },
                                         onDeleteSlot = { slot ->
                                             appViewModel.deleteSlotModel(slot)

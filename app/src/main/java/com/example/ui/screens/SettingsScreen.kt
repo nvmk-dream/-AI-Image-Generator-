@@ -86,6 +86,7 @@ import com.example.data.AppLanguage
 import com.example.data.AppPreferencesState
 import com.example.ui.components.CircularGlowIconButton
 import com.example.ui.components.FrostedGlassCard
+import com.example.ui.components.OnnxDownloadLinksCard
 import com.example.ui.components.PaletteAppLogo
 import com.example.ui.theme.CyanVersionAccent
 import com.example.ui.theme.DeepPlumText
@@ -239,6 +240,7 @@ fun SettingsScreen(
                 SettingsDivider(darkTheme)
 
                 val isReady = metrics.ortRuntimeAvailable && metrics.isTxt2ImgReady
+                val hasIncomplete = metrics.incompleteSlots.isNotEmpty()
                 SettingsRowItem(
                     icon = Icons.Filled.CheckCircle,
                     iconTint = if (isReady) NeonReadyGreen else SoftAmberStatus,
@@ -261,7 +263,11 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(5.dp))
                         Text(
-                            text = if (isReady) "Ready (ONNX)" else "${metrics.installedCount}/4 Models (Tap)",
+                            text = when {
+                                isReady -> "Ready (ONNX)"
+                                hasIncomplete -> "Missing Weights (Tap)"
+                                else -> "${metrics.installedCount}/4 Models (Tap)"
+                            },
                             color = primaryTextColor,
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                         )
@@ -326,6 +332,12 @@ fun SettingsScreen(
                     )
                 }
             }
+
+            // 1B. ONNX Model Download Links Card (Hugging Face Direct & Repo Links)
+            OnnxDownloadLinksCard(
+                isTamil = isTamil,
+                darkTheme = darkTheme
+            )
 
             // 2. Content Safety Settings Card -> Opens Dedicated Content Safety Settings Page!
             FrostedGlassCard(darkTheme = darkTheme) {
@@ -693,26 +705,26 @@ fun SettingsScreen(
                         "உங்கள் மொபைலில் ஒரு Folder-ல் கீழ்கண்ட .onnx ஃபைல்களைச் சேமிக்கவும்:\n\n" +
                             "Image Generation (4 மாடல்கள்):\n" +
                             "1. text_encoder.onnx\n" +
-                            "2. unet.onnx (அல்லது model.onnx + weights.pb)\n" +
+                            "2. unet/ (model.onnx + model.onnx.data [860 MB] அல்லது model.onnx + weights.pb [3.44 GB])\n" +
                             "3. vae_decoder.onnx\n" +
                             "4. vae_encoder.onnx\n\n" +
                             "Face Swap (3 மாடல்கள் - விருப்பம்):\n" +
                             "5. det_10g.onnx\n" +
                             "6. w600k_r50.onnx\n" +
                             "7. inswapper_128.onnx (அல்லது hyperswap_1b_256.onnx)\n\n" +
-                            "பின்னர் Models பக்கத்தில் 'One-Touch Folder Upload' பட்டனைத் தொட்டால் அனைத்தும் தானாகவே ஏற்றப்படும்."
+                            "Settings பக்கத்தில் உள்ள 'ONNX மாடல் Download Links' மூலம் பதிவிறக்கி, Models பக்கத்தில் 'One-Touch Folder Upload' செய்யவும்."
                     } else {
                         "Save your .onnx model files inside a folder on your phone:\n\n" +
                             "Core Image Generation (4 Models):\n" +
                             "1. text_encoder.onnx\n" +
-                            "2. unet.onnx (or model.onnx + weights.pb)\n" +
+                            "2. unet/ (model.onnx + model.onnx.data [860 MB] OR model.onnx + weights.pb [3.44 GB])\n" +
                             "3. vae_decoder.onnx\n" +
                             "4. vae_encoder.onnx\n\n" +
                             "Face Swap Add-On (3 Models - Optional):\n" +
                             "5. det_10g.onnx\n" +
                             "6. w600k_r50.onnx\n" +
                             "7. inswapper_128.onnx (or hyperswap_1b_256.onnx)\n\n" +
-                            "Then open the Models tab and tap 'One-Touch Folder Upload' to auto-import everything at once."
+                            "Use 'ONNX Model Download Links' in Settings, then open the Models tab and tap 'One-Touch Folder Upload'."
                     }
                 )
             },

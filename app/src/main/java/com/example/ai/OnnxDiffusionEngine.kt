@@ -72,11 +72,20 @@ class OnnxDiffusionEngine(
         lines.add("ONNX Runtime v${env.version} (${if (preferNnapi) "NNAPI + CPU Fallback" else "CPU Multi-Thread"})")
 
         var verifiedCount = 0
+        var incompleteCount = 0
         for (slot in DiffusionModelSlot.entries) {
             currentCoroutineContext().ensureActive()
             val file = modelManager.resolveExistingSlotFile(slot)
             if (file == null) {
                 lines.add("• ${slot.canonicalFileName}: Not uploaded yet")
+                continue
+            }
+            val missingCompanions = OnnxModelManager.findMissingCompanionFiles(file)
+            if (missingCompanions.isNotEmpty()) {
+                lines.add(
+                    "⚠️ ${slot.canonicalFileName} (${OnnxModelManager.formatBytes(file.length())}) -> Incomplete: missing ${missingCompanions.joinToString()} (See Settings → ONNX Model Download Links)"
+                )
+                incompleteCount++
                 continue
             }
             val t0 = System.currentTimeMillis()
@@ -91,7 +100,7 @@ class OnnxDiffusionEngine(
                 verifiedCount++
             }
         }
-        if (verifiedCount == 0) {
+        if (verifiedCount == 0 && incompleteCount == 0) {
             error("No .onnx files installed yet. Open Models tab and use One-Touch Folder Upload.")
         }
         lines.joinToString("\n")
@@ -126,13 +135,10 @@ class OnnxDiffusionEngine(
             error(safetyCheck.messageEn ?: "Prompt blocked by safety check.")
         }
 
-        // 2. Verify required 3 Text-to-Image ONNX models exist
-        val textEncoderFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.TEXT_ENCODER)
-            ?: error("Missing text_encoder.onnx. Please upload your ONNX folder in Models tab.")
-        val unetFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.UNET)
-            ?: error("Missing unet.onnx. Please upload your ONNX folder in Models tab.")
-        val vaeDecoderFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.VAE_DECODER)
-            ?: error("Missing vae_decoder.onnx. Please upload your ONNX folder in Models tab.")
+        // 2. Verify required 3 Text-to-Image ONNX models & any external weights exist
+        val textEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.TEXT_ENCODER)
+        val unetFile = requireCompleteSlotFile(DiffusionModelSlot.UNET)
+        val vaeDecoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_DECODER)
 
         val (width, height) = parseResolution(resolutionLabel)
         val latentW = width / 8
@@ -274,41 +280,20 @@ class OnnxDiffusionEngine(
                     )
 
                     val scaledLatents = scheduler.scaleModelInput(latents, stepIdx)
-                    val condNoise = runUnetSingleBatch(
+                    val finalNoise = runEulerNoisePrediction(
                         env = env,
                         unetSession = unetSession,
-                        latents = scaledLatents,
+                        scaledLatents = scaledLatents,
                         latentH = latentH,
                         latentW = latentW,
                         timestep = t,
-                        encoderHiddenStates = posEmbeddings,
+                        posEmbeddings = posEmbeddings,
+                        negEmbeddings = negEmbeddings,
                         hiddenDim = hiddenDim,
-                        guidanceScale = effectiveGuidance,
+                        effectiveGuidance = effectiveGuidance,
                         imageWidth = width,
                         imageHeight = height
                     )
-
-                    val finalNoise = if (effectiveGuidance > 1.15f) {
-                        checkNotCancelled()
-                        val uncondNoise = runUnetSingleBatch(
-                            env = env,
-                            unetSession = unetSession,
-                            latents = scaledLatents,
-                            latentH = latentH,
-                            latentW = latentW,
-                            timestep = t,
-                            encoderHiddenStates = negEmbeddings,
-                            hiddenDim = hiddenDim,
-                            guidanceScale = effectiveGuidance,
-                            imageWidth = width,
-                            imageHeight = height
-                        )
-                        FloatArray(condNoise.size) { i ->
-                            uncondNoise[i] + effectiveGuidance * (condNoise[i] - uncondNoise[i])
-                        }
-                    } else {
-                        condNoise
-                    }
 
                     latents = scheduler.step(finalNoise, stepIdx, latents)
                 }
@@ -401,15 +386,11 @@ class OnnxDiffusionEngine(
             error(safetyCheck.messageEn ?: "Please adjust your prompt and try again.")
         }
 
-        // 2. Verify all 4 ONNX models exist (including vae_encoder.onnx)
-        val vaeEncoderFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.VAE_ENCODER)
-            ?: error("Missing vae_encoder.onnx. Please upload all 4 ONNX models in the Models tab.")
-        val textEncoderFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.TEXT_ENCODER)
-            ?: error("Missing text_encoder.onnx. Please upload your ONNX folder in Models tab.")
-        val unetFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.UNET)
-            ?: error("Missing unet.onnx. Please upload your ONNX folder in Models tab.")
-        val vaeDecoderFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.VAE_DECODER)
-            ?: error("Missing vae_decoder.onnx. Please upload your ONNX folder in Models tab.")
+        // 2. Verify all 4 ONNX models & external weights exist (including vae_encoder.onnx)
+        val vaeEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_ENCODER)
+        val textEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.TEXT_ENCODER)
+        val unetFile = requireCompleteSlotFile(DiffusionModelSlot.UNET)
+        val vaeDecoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_DECODER)
 
         val (width, height) = parseResolution(resolutionLabel)
         val latentW = width / 8
@@ -586,41 +567,20 @@ class OnnxDiffusionEngine(
                     )
 
                     val scaledLatents = scheduler.scaleModelInput(latents, stepIdx)
-                    val condNoise = runUnetSingleBatch(
+                    val finalNoise = runEulerNoisePrediction(
                         env = env,
                         unetSession = unetSession,
-                        latents = scaledLatents,
+                        scaledLatents = scaledLatents,
                         latentH = latentH,
                         latentW = latentW,
                         timestep = t,
-                        encoderHiddenStates = posEmbeddings,
+                        posEmbeddings = posEmbeddings,
+                        negEmbeddings = negEmbeddings,
                         hiddenDim = hiddenDim,
-                        guidanceScale = effectiveGuidance,
+                        effectiveGuidance = effectiveGuidance,
                         imageWidth = width,
                         imageHeight = height
                     )
-
-                    val finalNoise = if (effectiveGuidance > 1.15f) {
-                        checkNotCancelled()
-                        val uncondNoise = runUnetSingleBatch(
-                            env = env,
-                            unetSession = unetSession,
-                            latents = scaledLatents,
-                            latentH = latentH,
-                            latentW = latentW,
-                            timestep = t,
-                            encoderHiddenStates = negEmbeddings,
-                            hiddenDim = hiddenDim,
-                            guidanceScale = effectiveGuidance,
-                            imageWidth = width,
-                            imageHeight = height
-                        )
-                        FloatArray(condNoise.size) { i ->
-                            uncondNoise[i] + effectiveGuidance * (condNoise[i] - uncondNoise[i])
-                        }
-                    } else {
-                        condNoise
-                    }
 
                     latents = scheduler.step(finalNoise, stepIdx, latents)
                 }
@@ -782,6 +742,18 @@ class OnnxDiffusionEngine(
         return true
     }
 
+    private fun requireCompleteSlotFile(slot: DiffusionModelSlot): File {
+        val file = modelManager.resolveExistingSlotFile(slot)
+            ?: error("Missing ${slot.canonicalFileName}. Please upload your ONNX folder in the Models tab.")
+        val missingCompanions = OnnxModelManager.findMissingCompanionFiles(file)
+        if (missingCompanions.isNotEmpty()) {
+            error(
+                "${slot.canonicalFileName} (${OnnxModelManager.formatBytes(file.length())}) is incomplete — missing external weights: ${missingCompanions.joinToString()}. Download the complete ONNX model pair from Settings → ONNX Model Download Links, or attach ${missingCompanions.first()} in the Models tab."
+            )
+        }
+        return file
+    }
+
     private fun createSafeSession(
         env: OrtEnvironment,
         modelFile: File,
@@ -793,7 +765,8 @@ class OnnxDiffusionEngine(
             ?.filter { it.isFile && it.absolutePath != modelFile.absolutePath && !it.name.endsWith(".meta") }
             ?.sumOf { it.length() } ?: 0L
         val totalBytes = modelFile.length() + companionBytes
-        val isLargeExternalModel = totalBytes > 600L * 1024L * 1024L
+        val isLargeExternalModel = totalBytes > 500L * 1024L * 1024L
+        val isUltraLargeModel = totalBytes > 1_200L * 1024L * 1024L
         val cpuThreads = Runtime.getRuntime().availableProcessors().coerceIn(4, 6)
 
         if (preferNnapi && !isLargeExternalModel) {
@@ -814,15 +787,14 @@ class OnnxDiffusionEngine(
             }
         }
         OrtSession.SessionOptions().use { opts ->
-            // Use BASIC_OPT + Arena disabled on >600MB models (e.g. 3.44 GB FP32 UNet + weights.pb)
-            // so ORT does not duplicate 3.44 GB of weights in RAM during constant folding.
-            opts.setOptimizationLevel(
-                if (isLargeExternalModel || lowRamMode) {
-                    OrtSession.SessionOptions.OptLevel.BASIC_OPT
-                } else {
-                    OrtSession.SessionOptions.OptLevel.ALL_OPT
-                }
-            )
+            // Ultra-large (>1.2 GB, e.g. 3.44 GB FP32 weights.pb) uses NO_OPT so ORT never
+            // duplicates gigabytes of external tensor initializers during constant folding.
+            val optLevel = when {
+                isUltraLargeModel -> OrtSession.SessionOptions.OptLevel.NO_OPT
+                isLargeExternalModel || lowRamMode -> OrtSession.SessionOptions.OptLevel.BASIC_OPT
+                else -> OrtSession.SessionOptions.OptLevel.ALL_OPT
+            }
+            opts.setOptimizationLevel(optLevel)
             opts.setIntraOpNumThreads(cpuThreads)
             if (isLargeExternalModel || lowRamMode) {
                 opts.setCPUArenaAllocator(false)
@@ -865,19 +837,99 @@ class OnnxDiffusionEngine(
         }
     }
 
-    private fun runUnetSingleBatch(
+    private fun unetRequiresStaticBatchTwo(unetSession: OrtSession): Boolean {
+        for ((name, nodeInfo) in unetSession.inputInfo) {
+            val ti = nodeInfo.info as? TensorInfo ?: continue
+            val lower = name.lowercase(Locale.US)
+            if ((lower == "sample" || lower.contains("latent")) && ti.shape.size >= 4 && ti.shape[0] == 2L) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private suspend fun runEulerNoisePrediction(
+        env: OrtEnvironment,
+        unetSession: OrtSession,
+        scaledLatents: FloatArray,
+        latentH: Int,
+        latentW: Int,
+        timestep: Int,
+        posEmbeddings: FloatArray,
+        negEmbeddings: FloatArray,
+        hiddenDim: Int,
+        effectiveGuidance: Float,
+        imageWidth: Int,
+        imageHeight: Int
+    ): FloatArray {
+        if (effectiveGuidance > 1.15f && unetRequiresStaticBatchTwo(unetSession)) {
+            return runUnetBatchedCfgTwo(
+                env = env,
+                unetSession = unetSession,
+                latents = scaledLatents,
+                latentH = latentH,
+                latentW = latentW,
+                timestep = timestep,
+                uncondHiddenStates = negEmbeddings,
+                condHiddenStates = posEmbeddings,
+                hiddenDim = hiddenDim,
+                guidanceScale = effectiveGuidance,
+                imageWidth = imageWidth,
+                imageHeight = imageHeight
+            )
+        }
+
+        val condNoise = runUnetSingleBatch(
+            env = env,
+            unetSession = unetSession,
+            latents = scaledLatents,
+            latentH = latentH,
+            latentW = latentW,
+            timestep = timestep,
+            encoderHiddenStates = posEmbeddings,
+            hiddenDim = hiddenDim,
+            guidanceScale = effectiveGuidance,
+            imageWidth = imageWidth,
+            imageHeight = imageHeight
+        )
+        return if (effectiveGuidance > 1.15f) {
+            checkNotCancelled()
+            val uncondNoise = runUnetSingleBatch(
+                env = env,
+                unetSession = unetSession,
+                latents = scaledLatents,
+                latentH = latentH,
+                latentW = latentW,
+                timestep = timestep,
+                encoderHiddenStates = negEmbeddings,
+                hiddenDim = hiddenDim,
+                guidanceScale = effectiveGuidance,
+                imageWidth = imageWidth,
+                imageHeight = imageHeight
+            )
+            FloatArray(condNoise.size) { i ->
+                uncondNoise[i] + effectiveGuidance * (condNoise[i] - uncondNoise[i])
+            }
+        } else {
+            condNoise
+        }
+    }
+
+    private fun runUnetBatchedCfgTwo(
         env: OrtEnvironment,
         unetSession: OrtSession,
         latents: FloatArray,
         latentH: Int,
         latentW: Int,
         timestep: Int,
-        encoderHiddenStates: FloatArray,
+        uncondHiddenStates: FloatArray,
+        condHiddenStates: FloatArray,
         hiddenDim: Int,
         guidanceScale: Float,
         imageWidth: Int,
         imageHeight: Int
     ): FloatArray {
+        val latentSize = 4 * latentH * latentW
         val createdTensors = mutableListOf<OnnxTensor>()
         try {
             val inputs = LinkedHashMap<String, OnnxTensor>()
@@ -886,58 +938,37 @@ class OnnxDiffusionEngine(
                 val lower = name.lowercase(Locale.US)
                 val tensor = when {
                     lower == "sample" || lower.contains("latent") -> {
+                        val doubled = FloatArray(latentSize * 2)
+                        System.arraycopy(latents, 0, doubled, 0, latentSize)
+                        System.arraycopy(latents, 0, doubled, latentSize, latentSize)
                         createFloatOrFp16Tensor(
                             env = env,
-                            data = latents,
-                            shape = longArrayOf(1L, 4L, latentH.toLong(), latentW.toLong()),
+                            data = doubled,
+                            shape = longArrayOf(2L, 4L, latentH.toLong(), latentW.toLong()),
                             targetType = ti.type
                         )
                     }
                     lower == "timestep" || lower == "t" -> {
-                        createTimestepTensor(env, timestep, ti)
+                        createTimestepTensor(env, timestep, ti, batchSize = 2)
                     }
                     lower.contains("encoder_hidden_states") || lower.contains("context") -> {
-                        val expectedDim = if (ti.shape.size >= 3 && ti.shape[2] > 0) {
-                            ti.shape[2].toInt()
-                        } else {
-                            hiddenDim
-                        }
-                        val adaptedHidden = adaptEmbeddingDimension(encoderHiddenStates, 77, expectedDim)
+                        val expectedDim = if (ti.shape.size >= 3 && ti.shape[2] > 0) ti.shape[2].toInt() else hiddenDim
+                        val uncondAdapted = adaptEmbeddingDimension(uncondHiddenStates, 77, expectedDim)
+                        val condAdapted = adaptEmbeddingDimension(condHiddenStates, 77, expectedDim)
+                        val packed = FloatArray(uncondAdapted.size + condAdapted.size)
+                        System.arraycopy(uncondAdapted, 0, packed, 0, uncondAdapted.size)
+                        System.arraycopy(condAdapted, 0, packed, uncondAdapted.size, condAdapted.size)
                         createFloatOrFp16Tensor(
                             env = env,
-                            data = adaptedHidden,
-                            shape = longArrayOf(1L, 77L, expectedDim.toLong()),
-                            targetType = ti.type
-                        )
-                    }
-                    lower.contains("timestep_cond") -> {
-                        val condDim = if (ti.shape.size >= 2 && ti.shape[1] > 0) ti.shape[1].toInt() else 256
-                        val wEmbed = DiffusionSchedulers.buildGuidanceScaleEmbedding(
-                            w = (guidanceScale - 1.0f).coerceAtLeast(0f),
-                            embeddingDim = condDim
-                        )
-                        createFloatOrFp16Tensor(
-                            env = env,
-                            data = wEmbed,
-                            shape = longArrayOf(1L, condDim.toLong()),
-                            targetType = ti.type
-                        )
-                    }
-                    lower.contains("time_ids") -> {
-                        val timeIds = floatArrayOf(
-                            imageHeight.toFloat(), imageWidth.toFloat(),
-                            0f, 0f,
-                            imageHeight.toFloat(), imageWidth.toFloat()
-                        )
-                        createFloatOrFp16Tensor(
-                            env = env,
-                            data = timeIds,
-                            shape = longArrayOf(1L, 6L),
+                            data = packed,
+                            shape = longArrayOf(2L, 77L, expectedDim.toLong()),
                             targetType = ti.type
                         )
                     }
                     else -> {
-                        val concreteShape = ti.shape.map { if (it <= 0L) 1L else it }.toLongArray()
+                        val concreteShape = ti.shape.mapIndexed { idx, d ->
+                            if (d <= 0L) (if (idx == 0) 2L else 1L) else d
+                        }.toLongArray()
                         val elemCount = concreteShape.fold(1L) { a, b -> a * b }.toInt().coerceAtLeast(1)
                         createFloatOrFp16Tensor(
                             env = env,
@@ -953,7 +984,146 @@ class OnnxDiffusionEngine(
 
             unetSession.run(inputs).use { results ->
                 val outTensor = results[0] as OnnxTensor
-                return extractFloatArray(outTensor)
+                val raw = extractFloatArray(outTensor)
+                return if (raw.size >= latentSize * 2) {
+                    FloatArray(latentSize) { i ->
+                        val uncond = raw[i]
+                        val cond = raw[latentSize + i]
+                        uncond + guidanceScale * (cond - uncond)
+                    }
+                } else {
+                    raw.copyOfRange(0, minOf(raw.size, latentSize))
+                }
+            }
+        } finally {
+            createdTensors.forEach { runCatching { it.close() } }
+        }
+    }
+
+    private fun runUnetSingleBatch(
+        env: OrtEnvironment,
+        unetSession: OrtSession,
+        latents: FloatArray,
+        latentH: Int,
+        latentW: Int,
+        timestep: Int,
+        encoderHiddenStates: FloatArray,
+        hiddenDim: Int,
+        guidanceScale: Float,
+        imageWidth: Int,
+        imageHeight: Int
+    ): FloatArray {
+        val latentSize = 4 * latentH * latentW
+        val forceBatchTwo = unetRequiresStaticBatchTwo(unetSession)
+        val batchCount = if (forceBatchTwo) 2 else 1
+        val createdTensors = mutableListOf<OnnxTensor>()
+        try {
+            val inputs = LinkedHashMap<String, OnnxTensor>()
+            for ((name, nodeInfo) in unetSession.inputInfo) {
+                val ti = nodeInfo.info as? TensorInfo ?: continue
+                val lower = name.lowercase(Locale.US)
+                val tensor = when {
+                    lower == "sample" || lower.contains("latent") -> {
+                        val data = if (batchCount == 2) {
+                            FloatArray(latentSize * 2).also {
+                                System.arraycopy(latents, 0, it, 0, latentSize)
+                                System.arraycopy(latents, 0, it, latentSize, latentSize)
+                            }
+                        } else {
+                            latents
+                        }
+                        createFloatOrFp16Tensor(
+                            env = env,
+                            data = data,
+                            shape = longArrayOf(batchCount.toLong(), 4L, latentH.toLong(), latentW.toLong()),
+                            targetType = ti.type
+                        )
+                    }
+                    lower == "timestep" || lower == "t" -> {
+                        createTimestepTensor(env, timestep, ti, batchSize = batchCount)
+                    }
+                    lower.contains("encoder_hidden_states") || lower.contains("context") -> {
+                        val expectedDim = if (ti.shape.size >= 3 && ti.shape[2] > 0) {
+                            ti.shape[2].toInt()
+                        } else {
+                            hiddenDim
+                        }
+                        val adaptedHidden = adaptEmbeddingDimension(encoderHiddenStates, 77, expectedDim)
+                        val data = if (batchCount == 2) {
+                            FloatArray(adaptedHidden.size * 2).also {
+                                System.arraycopy(adaptedHidden, 0, it, 0, adaptedHidden.size)
+                                System.arraycopy(adaptedHidden, 0, it, adaptedHidden.size, adaptedHidden.size)
+                            }
+                        } else {
+                            adaptedHidden
+                        }
+                        createFloatOrFp16Tensor(
+                            env = env,
+                            data = data,
+                            shape = longArrayOf(batchCount.toLong(), 77L, expectedDim.toLong()),
+                            targetType = ti.type
+                        )
+                    }
+                    lower.contains("timestep_cond") -> {
+                        val condDim = if (ti.shape.size >= 2 && ti.shape[1] > 0) ti.shape[1].toInt() else 256
+                        val wEmbed = DiffusionSchedulers.buildGuidanceScaleEmbedding(
+                            w = (guidanceScale - 1.0f).coerceAtLeast(0f),
+                            embeddingDim = condDim
+                        )
+                        val data = if (batchCount == 2) {
+                            FloatArray(wEmbed.size * 2).also {
+                                System.arraycopy(wEmbed, 0, it, 0, wEmbed.size)
+                                System.arraycopy(wEmbed, 0, it, wEmbed.size, wEmbed.size)
+                            }
+                        } else {
+                            wEmbed
+                        }
+                        createFloatOrFp16Tensor(
+                            env = env,
+                            data = data,
+                            shape = longArrayOf(batchCount.toLong(), condDim.toLong()),
+                            targetType = ti.type
+                        )
+                    }
+                    lower.contains("time_ids") -> {
+                        val singleTimeIds = floatArrayOf(
+                            imageHeight.toFloat(), imageWidth.toFloat(),
+                            0f, 0f,
+                            imageHeight.toFloat(), imageWidth.toFloat()
+                        )
+                        val data = if (batchCount == 2) singleTimeIds + singleTimeIds else singleTimeIds
+                        createFloatOrFp16Tensor(
+                            env = env,
+                            data = data,
+                            shape = longArrayOf(batchCount.toLong(), 6L),
+                            targetType = ti.type
+                        )
+                    }
+                    else -> {
+                        val concreteShape = ti.shape.mapIndexed { idx, d ->
+                            if (d <= 0L) (if (idx == 0) batchCount.toLong() else 1L) else d
+                        }.toLongArray()
+                        val elemCount = concreteShape.fold(1L) { a, b -> a * b }.toInt().coerceAtLeast(1)
+                        createFloatOrFp16Tensor(
+                            env = env,
+                            data = FloatArray(elemCount),
+                            shape = concreteShape,
+                            targetType = ti.type
+                        )
+                    }
+                }
+                createdTensors.add(tensor)
+                inputs[name] = tensor
+            }
+
+            unetSession.run(inputs).use { results ->
+                val outTensor = results[0] as OnnxTensor
+                val raw = extractFloatArray(outTensor)
+                return if (batchCount == 2 && raw.size >= latentSize) {
+                    raw.copyOfRange(0, latentSize)
+                } else {
+                    raw
+                }
             }
         } finally {
             createdTensors.forEach { runCatching { it.close() } }
@@ -1032,18 +1202,30 @@ class OnnxDiffusionEngine(
     private fun createTimestepTensor(
         env: OrtEnvironment,
         timestep: Int,
-        info: TensorInfo
+        info: TensorInfo,
+        batchSize: Int = 1
     ): OnnxTensor {
         val isScalar = info.shape.isEmpty()
-        val shape = if (isScalar) longArrayOf() else longArrayOf(1L)
+        val count = if (!isScalar && batchSize == 2 && info.shape.firstOrNull() == 2L) 2 else 1
+        val shape = if (isScalar) longArrayOf() else longArrayOf(count.toLong())
         return when (info.type) {
-            OnnxJavaType.INT64 -> OnnxTensor.createTensor(env, LongBuffer.wrap(longArrayOf(timestep.toLong())), shape)
-            OnnxJavaType.INT32 -> OnnxTensor.createTensor(env, IntBuffer.wrap(intArrayOf(timestep)), shape)
+            OnnxJavaType.INT64 -> {
+                val arr = LongArray(count) { timestep.toLong() }
+                OnnxTensor.createTensor(env, LongBuffer.wrap(arr), shape)
+            }
+            OnnxJavaType.INT32 -> {
+                val arr = IntArray(count) { timestep }
+                OnnxTensor.createTensor(env, IntBuffer.wrap(arr), shape)
+            }
             OnnxJavaType.FLOAT16 -> {
                 val half = floatToHalfBits(timestep.toFloat())
-                OnnxTensor.createTensor(env, ShortBuffer.wrap(shortArrayOf(half)), shape, OnnxJavaType.FLOAT16)
+                val arr = ShortArray(count) { half }
+                OnnxTensor.createTensor(env, ShortBuffer.wrap(arr), shape, OnnxJavaType.FLOAT16)
             }
-            else -> OnnxTensor.createTensor(env, FloatBuffer.wrap(floatArrayOf(timestep.toFloat())), shape)
+            else -> {
+                val arr = FloatArray(count) { timestep.toFloat() }
+                OnnxTensor.createTensor(env, FloatBuffer.wrap(arr), shape)
+            }
         }
     }
 
