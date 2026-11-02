@@ -409,6 +409,11 @@ class OnnxModelManager(private val context: Context) {
             File(targetDir, "source_name.meta").writeText(originalNameHint)
         }
         if (slot == DiffusionModelSlot.UNET) {
+            val protoLocations = extractExternalDataLocations(destFile)
+            if (destFile.length() in 30_000_000L..400_000_000L && protoLocations.isEmpty()) {
+                destFile.delete()
+                error("தேர்ந்தெடுக்கப்பட்ட ஃபைல் (${formatBytes(expectedTotal)}) UNet மாடல் அல்ல; இது VAE Decoder ஃபைல் போல உள்ளது. UNet மாடல் ~860 MB (.data) அல்லது 3.4 GB (FP32) அளவு இருக்கும்.")
+            }
             File(modelsRootDir, "tokenizer/scheduler_config.json").delete()
         }
         if (slot == DiffusionModelSlot.FACE_SWAPPER) {
@@ -593,8 +598,7 @@ class OnnxModelManager(private val context: Context) {
                     // Prefer companion in same subfolder, else fallback to unique match in tree
                     val matchedCompanion = siblingCandidates.firstOrNull { other ->
                         other.parentName == match.parentName &&
-                            normalizeBrowserDuplicateName(other.doc.name.orEmpty())
-                                .equals(expectedLoc, ignoreCase = true)
+                            companionMatchesExpectedLocation(other.doc.name.orEmpty(), expectedLoc)
                     } ?: siblingCandidates.firstOrNull { other ->
                         other.parentName == match.parentName &&
                             shouldCopyCompanionWeight(
@@ -604,8 +608,7 @@ class OnnxModelManager(private val context: Context) {
                                 onnxFileForRefScan = destOnnx
                             )
                     } ?: siblingCandidates.singleOrNull { other ->
-                        normalizeBrowserDuplicateName(other.doc.name.orEmpty())
-                            .equals(expectedLoc, ignoreCase = true)
+                        companionMatchesExpectedLocation(other.doc.name.orEmpty(), expectedLoc)
                     }
 
                     if (matchedCompanion != null) {
@@ -999,8 +1002,10 @@ class OnnxModelManager(private val context: Context) {
                 if (normCand == "model.onnx") {
                     val siblings = allFileNamesByParent[cand.parentNameLower].orEmpty()
                     val hasExternalWeights = siblings.any { isCompanionWeightFileName(it) }
-                    val sharesDiffusionFolder = cand.parentNameLower in coreMatchedParents
-                    hasExternalWeights || sharesDiffusionFolder
+                    // A graph shell must be <= 15 MB to pair with external weights, OR a full standalone UNet > 1.5 GB.
+                    // This explicitly prevents VAE decoders (198 MB) or text encoders (490 MB) from being mistaken for UNet.
+                    (cand.fileSizeBytes <= 15_000_000L && hasExternalWeights) ||
+                        cand.fileSizeBytes > 1_500_000_000L
                 } else {
                     false
                 }
@@ -1050,7 +1055,12 @@ class OnnxModelManager(private val context: Context) {
             )
             val matchedStemData = siblings.firstOrNull { it in stemDataNames }
             val stemDataBytes = matchedStemData?.let { compSizes[it] } ?: 0L
-            val weightsPbBytes = compSizes["weights.pb"] ?: compSizes["${stem}_weights.pb"] ?: 0L
+            val weightsPbBytes = compSizes["weights.pb"]
+                ?: compSizes["wights.pb"]
+                ?: compSizes["${stem}_weights.pb"]
+                ?: compSizes["${stem}_wights.pb"]
+                ?: compSizes.entries.firstOrNull { it.key.endsWith(".pb") }?.value
+                ?: 0L
 
             val estimatedTotalBytes = when {
                 stemDataBytes > 0L -> cand.fileSizeBytes + stemDataBytes
@@ -1064,7 +1074,7 @@ class OnnxModelManager(private val context: Context) {
                 (estimatedTotalBytes in 200_000_000L..1_600_000_000L)
 
             val isHeavyFp32Unet = estimatedTotalBytes > 2_300_000_000L ||
-                (matchedStemData == null && normCand == "unet.onnx" && "weights.pb" in siblings)
+                (matchedStemData == null && normCand == "unet.onnx" && ("weights.pb" in siblings || "wights.pb" in siblings))
 
             return when (preferredUnetMode) {
                 PreferredUnetImportMode.AUTO_FAST_MOBILE,
@@ -1088,11 +1098,11 @@ class OnnxModelManager(private val context: Context) {
 
         /**
          * Resolves all slots cleanly:
-         * 1. Non-UNet slots claim their explicit matches first so subfolders like text_encoder/model.onnx
-         *    are never mistaken for UNet.
-         * 2. All eligible UNet candidates (both explicit unet.onnx and flat-folder model.onnx + companion
-         *    weights) are evaluated together and ranked by [preferredUnetMode] — automatically preferring
-         *    fast ~860 MB LCM INT8 models over slow 3.44 GB FP32 weights.pb when both exist in one folder!
+         * 1. Non-UNet slots claim their explicit matches first by keyword / folder name.
+         * 2. Smart Flat-Folder Fallback: If non-UNet slots are still missing (e.g. flat download folder "IG"
+         *    with model (3).onnx, model (4).onnx etc.), match them by standard physical component file sizes.
+         * 3. All eligible UNet candidates (both explicit unet.onnx and flat-folder model.onnx + companion
+         *    weights) are evaluated together and ranked by [preferredUnetMode].
          */
         fun resolveFolderSlotMatches(
             candidates: List<CandidateModelFile>,
@@ -1103,7 +1113,7 @@ class OnnxModelManager(private val context: Context) {
             val matched = LinkedHashMap<DiffusionModelSlot, Int>()
             val claimedIndices = HashSet<Int>()
 
-            // Step 1: Match all non-UNet slots first
+            // Step 1: Match all non-UNet slots first by explicit keywords/subfolders
             for (slot in DiffusionModelSlot.entries) {
                 if (slot == DiffusionModelSlot.UNET) continue
                 val found = candidates.firstOrNull { cand ->
@@ -1113,6 +1123,38 @@ class OnnxModelManager(private val context: Context) {
                 if (found != null) {
                     matched[slot] = found.index
                     claimedIndices.add(found.index)
+                }
+            }
+
+            // Step 1.5: Smart Flat-Folder Fallback by File Size for remaining unmatched slots
+            if (DiffusionModelSlot.TEXT_ENCODER !in matched) {
+                // CLIP Text Encoder is ~490 MB (typical range: 300 MB .. 750 MB)
+                val textEnc = candidates.filter { it.index !in claimedIndices }.firstOrNull { cand ->
+                    cand.fileSizeBytes in 300_000_000L..750_000_000L
+                }
+                if (textEnc != null) {
+                    matched[DiffusionModelSlot.TEXT_ENCODER] = textEnc.index
+                    claimedIndices.add(textEnc.index)
+                }
+            }
+            if (DiffusionModelSlot.VAE_DECODER !in matched) {
+                // VAE Decoder is ~198 MB (typical range: 170 MB .. 230 MB)
+                val vaeDec = candidates.filter { it.index !in claimedIndices }.firstOrNull { cand ->
+                    cand.fileSizeBytes in 170_000_000L..230_000_000L
+                }
+                if (vaeDec != null) {
+                    matched[DiffusionModelSlot.VAE_DECODER] = vaeDec.index
+                    claimedIndices.add(vaeDec.index)
+                }
+            }
+            if (DiffusionModelSlot.VAE_ENCODER !in matched) {
+                // VAE Encoder is ~136 MB (typical range: 100 MB .. 169_000_000L)
+                val vaeEnc = candidates.filter { it.index !in claimedIndices }.firstOrNull { cand ->
+                    cand.fileSizeBytes in 100_000_000L..169_000_000L
+                }
+                if (vaeEnc != null) {
+                    matched[DiffusionModelSlot.VAE_ENCODER] = vaeEnc.index
+                    claimedIndices.add(vaeEnc.index)
                 }
             }
 
@@ -1150,7 +1192,21 @@ class OnnxModelManager(private val context: Context) {
             return lower.endsWith(".onnx_data") ||
                 lower.endsWith(".onnx.data") ||
                 lower == "weights.pb" ||
-                lower.endsWith("_weights.pb")
+                lower == "wights.pb" ||
+                lower.endsWith("_weights.pb") ||
+                lower.endsWith("_wights.pb") ||
+                lower.endsWith(".pb")
+        }
+
+        fun companionMatchesExpectedLocation(siblingName: String, expectedLoc: String): Boolean {
+            val sNorm = normalizeBrowserDuplicateName(siblingName).lowercase(Locale.US)
+            val eNorm = expectedLoc.lowercase(Locale.US)
+            if (sNorm == eNorm) return true
+            if ((eNorm == "weights.pb" || eNorm.endsWith("weights.pb")) &&
+                (sNorm == "wights.pb" || sNorm.endsWith("wights.pb") || sNorm.endsWith(".pb"))
+            ) return true
+            if (eNorm.contains(".data") && sNorm.contains(".data")) return true
+            return false
         }
 
         /**
