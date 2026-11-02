@@ -60,7 +60,9 @@ import coil.compose.AsyncImage
 import com.example.ai.DiffusionModelSlot
 import com.example.ai.ModelSlotStatus
 import com.example.ai.OnnxModelManager
+import com.example.ai.PreferredUnetImportMode
 import com.example.ai.RealDeviceAndModelMetrics
+import com.example.ai.UnetVariant
 import com.example.data.AppPreferencesState
 import com.example.data.GeneratedCreation
 import com.example.ui.components.CircularGlowIconButton
@@ -82,6 +84,9 @@ fun ModelsTabScreen(
     isImporting: Boolean,
     importProgressText: String?,
     verificationReport: String?,
+    preferredUnetMode: PreferredUnetImportMode = PreferredUnetImportMode.AUTO_FAST_MOBILE,
+    onSelectPreferredUnetMode: (PreferredUnetImportMode) -> Unit = {},
+    onSwitchUnetFromFolder: (PreferredUnetImportMode) -> Unit = {},
     onOneTouchFolderUpload: () -> Unit,
     onVerifyPipeline: () -> Unit,
     onSingleSlotUpload: (DiffusionModelSlot) -> Unit,
@@ -137,7 +142,93 @@ fun ModelsTabScreen(
                     color = subColor,
                     style = MaterialTheme.typography.bodyMedium
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Dual-UNet Folder Preference Selector (Fast LCM ~860 MB vs Standard SD 3.44 GB)
+                Text(
+                    text = if (isTamil) {
+                        "ஒரே Folder-ல் 2 UNet இருந்தால் எதைத் தேர்வு செய்ய வேண்டும்?"
+                    } else {
+                        "When folder contains both UNets, import:"
+                    },
+                    color = textColor,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                val preferFastSelected = preferredUnetMode != PreferredUnetImportMode.FORCE_STANDARD_SD
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    val pillShape = RoundedCornerShape(14.dp)
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .minimumInteractiveComponentSize()
+                            .clip(pillShape)
+                            .background(
+                                if (preferFastSelected) {
+                                    Brush.horizontalGradient(listOf(PinkGlowStart, PinkGlowEnd))
+                                } else {
+                                    Brush.horizontalGradient(
+                                        listOf(
+                                            Color.White.copy(alpha = if (darkTheme) 0.12f else 0.55f),
+                                            Color.White.copy(alpha = if (darkTheme) 0.08f else 0.45f)
+                                        )
+                                    )
+                                }
+                            )
+                            .border(1.dp, Color.White.copy(alpha = 0.75f), pillShape)
+                            .clickable(enabled = !isImporting) {
+                                onSelectPreferredUnetMode(PreferredUnetImportMode.FORCE_FAST_LCM)
+                            }
+                            .padding(vertical = 8.dp, horizontal = 6.dp)
+                            .testTag("prefer_fast_lcm_unet_button")
+                    ) {
+                        Text(
+                            text = "⚡ Fast LCM (~860 MB)",
+                            color = if (preferFastSelected) Color.White else textColor,
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            maxLines = 1
+                        )
+                    }
+
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .minimumInteractiveComponentSize()
+                            .clip(pillShape)
+                            .background(
+                                if (!preferFastSelected) {
+                                    Brush.horizontalGradient(listOf(PurpleActionStart, PurpleActionEnd))
+                                } else {
+                                    Brush.horizontalGradient(
+                                        listOf(
+                                            Color.White.copy(alpha = if (darkTheme) 0.12f else 0.55f),
+                                            Color.White.copy(alpha = if (darkTheme) 0.08f else 0.45f)
+                                        )
+                                    )
+                                }
+                            )
+                            .border(1.dp, Color.White.copy(alpha = 0.75f), pillShape)
+                            .clickable(enabled = !isImporting) {
+                                onSelectPreferredUnetMode(PreferredUnetImportMode.FORCE_STANDARD_SD)
+                            }
+                            .padding(vertical = 8.dp, horizontal = 6.dp)
+                            .testTag("prefer_standard_sd_unet_button")
+                    ) {
+                        Text(
+                            text = "🎨 Standard (3.44 GB)",
+                            color = if (!preferFastSelected) Color.White else textColor,
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 val btnShape = RoundedCornerShape(22.dp)
                 Row(
@@ -180,6 +271,72 @@ fun ModelsTabScreen(
                         color = Color.White,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                     )
+                }
+
+                // Active UNet Badge + 1-Tap Switch Warning when Slow 3.44 GB FP32 is currently installed
+                if (metrics.unetVariant != UnetVariant.NONE) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val isSlowFp32 = metrics.unetVariant == UnetVariant.HEAVY_FP32
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                if (isSlowFp32) {
+                                    Color(0xFFFFF3E0).copy(alpha = if (darkTheme) 0.18f else 0.92f)
+                                } else {
+                                    Color.White.copy(alpha = if (darkTheme) 0.12f else 0.70f)
+                                }
+                            )
+                            .border(
+                                1.dp,
+                                if (isSlowFp32) Color(0xFFFF9800) else NeonReadyGreen,
+                                RoundedCornerShape(14.dp)
+                            )
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = metrics.activeUnetBadgeLabel(isTamil),
+                            color = if (isSlowFp32 && !darkTheme) Color(0xFFE65100) else textColor,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold)
+                        )
+                        if (isSlowFp32) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = if (isTamil) {
+                                    "இந்த 3.44 GB மாடல் CPU-வில் மிகவும் மெதுவாக இயங்கும். உங்கள் Folder-ல் உள்ள ~860 MB Fast LCM மாடலுக்கு மாற்ற கீழே அழுத்தவும்:"
+                                } else {
+                                    "This 3.44 GB FP32 UNet takes ~3 min/step on mobile CPU. Tap below to switch to Fast LCM (~860 MB) from your folder:"
+                                },
+                                color = subColor,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .minimumInteractiveComponentSize()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Brush.horizontalGradient(listOf(PinkGlowStart, VibrantPinkPill)))
+                                    .clickable(enabled = !isImporting) {
+                                        onSwitchUnetFromFolder(PreferredUnetImportMode.FORCE_FAST_LCM)
+                                    }
+                                    .padding(vertical = 8.dp, horizontal = 10.dp)
+                                    .testTag("models_switch_to_fast_lcm_button")
+                            ) {
+                                Text(
+                                    text = if (isTamil) {
+                                        "⚡ வேகமான Fast LCM (~860 MB) மாடலுக்கு மாற்றுக"
+                                    } else {
+                                        "⚡ Switch to Fast LCM (~860 MB) from Folder"
+                                    },
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
+                    }
                 }
 
                 if (metrics.hasAnySlotFilesOnDisk) {
@@ -391,6 +548,26 @@ private fun ModelSlotItemCard(
                         color = subColor.copy(alpha = 0.85f),
                         style = MaterialTheme.typography.labelSmall
                     )
+                    if (slot == DiffusionModelSlot.UNET && slotStatus.isInstalled) {
+                        val variant = OnnxModelManager.classifyUnetVariant(
+                            slotStatus.sourceFileLabel,
+                            slotStatus.totalBytes
+                        )
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = when (variant) {
+                                UnetVariant.FAST_LCM_INT8 ->
+                                    if (isTamil) "✓ Active: ⚡ வேகமான Fast LCM INT8 (4–8 Steps)" else "✓ Active: ⚡ Fast LCM INT8 (4–8 Steps)"
+                                UnetVariant.COMPACT_FP16 ->
+                                    "✓ Active: ⚡ Compact FP16 UNet"
+                                UnetVariant.HEAVY_FP32 ->
+                                    if (isTamil) "⚠️ Active: 🐢 மெதுவான 3.44 GB FP32 (Fast LCM மாற்ற பரிந்துரை)" else "⚠️ Active: 🐢 Slow 3.44 GB FP32"
+                                UnetVariant.NONE -> ""
+                            },
+                            color = if (variant == UnetVariant.HEAVY_FP32) Color(0xFFE65100) else NeonReadyGreen,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
                 }
 
                 IconButton(

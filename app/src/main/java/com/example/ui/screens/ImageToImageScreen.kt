@@ -135,6 +135,20 @@ fun ImageToImageScreen(
     }
     var showSafetyCombinedPreview by remember { mutableStateOf(false) }
     var compareMode by remember { mutableStateOf(CompareViewMode.AFTER) }
+    var liveElapsedSec by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+
+    androidx.compose.runtime.LaunchedEffect(isGenerating) {
+        if (isGenerating) {
+            val startedAt = System.currentTimeMillis()
+            liveElapsedSec = 0
+            while (true) {
+                kotlinx.coroutines.delay(1000L)
+                liveElapsedSec = ((System.currentTimeMillis() - startedAt) / 1000L).toInt()
+            }
+        } else {
+            liveElapsedSec = 0
+        }
+    }
 
     val finalCombinedPrompt = preferences.buildFinalGenerationInput(userPrompt)
 
@@ -178,9 +192,9 @@ fun ImageToImageScreen(
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold)
                     )
                     Text(
-                        text = "${preferences.resolution} • Auto Center-Crop • Offline",
+                        text = "${preferences.resolution} • ${metrics.activeUnetBadgeLabel(isTamil)}",
                         color = subColor,
-                        style = MaterialTheme.typography.bodyMedium
+                        style = MaterialTheme.typography.bodySmall
                     )
                 }
                 CircularGlowIconButton(
@@ -539,6 +553,8 @@ fun ImageToImageScreen(
                 if (isGenerating) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         val pct = (progress?.percent ?: 5).coerceIn(1, 100)
+                        val displaySec = maxOf(liveElapsedSec, ((progress?.elapsedMs ?: 0L) / 1000L).toInt())
+                        val timerText = java.lang.String.format(java.util.Locale.US, "%02d:%02ds", displaySec / 60, displaySec % 60)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
@@ -550,9 +566,9 @@ fun ImageToImageScreen(
                                 modifier = Modifier.weight(1f)
                             )
                             Text(
-                                text = "$pct%",
+                                text = "⏱ $timerText • $pct%",
                                 color = VibrantPinkPill,
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold)
                             )
                         }
                         Spacer(modifier = Modifier.height(6.dp))

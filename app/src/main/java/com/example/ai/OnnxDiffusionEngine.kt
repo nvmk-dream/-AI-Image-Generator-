@@ -11,6 +11,8 @@ import android.net.Uri
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.nio.FloatBuffer
 import java.nio.IntBuffer
@@ -56,9 +58,46 @@ class OnnxDiffusionEngine(
 ) {
     private val tokenizer = ClipTokenizer(context)
     private val cancelRequested = AtomicBoolean(false)
+    private val generationMutex = Mutex()
+    private val runLock = Any()
+
+    @Volatile
+    private var activeRunOptions: OrtSession.RunOptions? = null
 
     fun requestCancel() {
         cancelRequested.set(true)
+        synchronized(runLock) {
+            runCatching { activeRunOptions?.setTerminate(true) }
+        }
+    }
+
+    private fun runInterruptible(
+        session: OrtSession,
+        inputs: Map<String, OnnxTensor>
+    ): OrtSession.Result {
+        val opts = OrtSession.RunOptions()
+        synchronized(runLock) {
+            if (cancelRequested.get()) {
+                runCatching { opts.close() }
+                throw CancellationException("Generation cancelled by user.")
+            }
+            activeRunOptions = opts
+        }
+        return try {
+            session.run(inputs, opts)
+        } catch (t: Throwable) {
+            if (cancelRequested.get()) {
+                throw CancellationException("Generation cancelled by user.").apply { initCause(t) }
+            }
+            throw t
+        } finally {
+            synchronized(runLock) {
+                if (activeRunOptions === opts) {
+                    activeRunOptions = null
+                }
+            }
+            runCatching { opts.close() }
+        }
     }
 
     /**
@@ -123,8 +162,11 @@ class OnnxDiffusionEngine(
         seed: Long,
         onProgress: (GenerationProgress) -> Unit
     ): Result<TextToImageResult> = runCatching {
-        cancelRequested.set(false)
-        val startMs = System.currentTimeMillis()
+        currentCoroutineContext().ensureActive()
+        generationMutex.withLock {
+            currentCoroutineContext().ensureActive()
+            cancelRequested.set(false)
+            val startMs = System.currentTimeMillis()
 
         // 1. Mandatory safety check
         val safetyCheck = MandatorySafetyGuard.validateRequest(
@@ -230,13 +272,13 @@ class OnnxDiffusionEngine(
                 for (stepIdx in 0 until effectiveSteps) {
                     checkNotCancelled()
                     val t = scheduler.timesteps[stepIdx]
-                    val pct = 16 + (((stepIdx + 1).toFloat() / effectiveSteps.toFloat()) * 68f).toInt()
+                    val startPct = 16 + (((stepIdx + 0.25f) / effectiveSteps.toFloat()) * 68f).toInt()
                     onProgress(
                         GenerationProgress(
-                            stageTitle = "Generating (LCM Step ${stepIdx + 1}/$effectiveSteps)...",
+                            stageTitle = "⚡ Fast LCM (Step ${stepIdx + 1}/$effectiveSteps)...",
                             currentStep = stepIdx + 1,
                             totalSteps = effectiveSteps,
-                            percent = pct,
+                            percent = startPct,
                             elapsedMs = System.currentTimeMillis() - startMs
                         )
                     )
@@ -255,6 +297,17 @@ class OnnxDiffusionEngine(
                         imageHeight = height
                     )
                     latents = scheduler.step(noisePred, stepIdx, latents, seed)
+
+                    val donePct = 16 + (((stepIdx + 1).toFloat() / effectiveSteps.toFloat()) * 68f).toInt()
+                    onProgress(
+                        GenerationProgress(
+                            stageTitle = "⚡ Fast LCM (Step ${stepIdx + 1}/$effectiveSteps ✓)...",
+                            currentStep = stepIdx + 1,
+                            totalSteps = effectiveSteps,
+                            percent = donePct,
+                            elapsedMs = System.currentTimeMillis() - startMs
+                        )
+                    )
                 }
                 latents
             } else {
@@ -264,17 +317,22 @@ class OnnxDiffusionEngine(
                     seed = seed,
                     initSigma = scheduler.initNoiseSigma
                 )
+                val twoPassCfg = effectiveGuidance > 1.15f && !unetRequiresStaticBatchTwo(unetSession)
 
                 for (stepIdx in 0 until effectiveSteps) {
                     checkNotCancelled()
                     val t = scheduler.timesteps[stepIdx]
-                    val pct = 16 + (((stepIdx + 1).toFloat() / effectiveSteps.toFloat()) * 68f).toInt()
+                    val pass1Pct = 16 + (((stepIdx + 0.18f) / effectiveSteps.toFloat()) * 68f).toInt()
                     onProgress(
                         GenerationProgress(
-                            stageTitle = "Denoising (Step ${stepIdx + 1}/$effectiveSteps)...",
+                            stageTitle = if (twoPassCfg) {
+                                "Denoising (Step ${stepIdx + 1}/$effectiveSteps • Pass 1/2)..."
+                            } else {
+                                "Denoising (Step ${stepIdx + 1}/$effectiveSteps)..."
+                            },
                             currentStep = stepIdx + 1,
                             totalSteps = effectiveSteps,
-                            percent = pct,
+                            percent = pass1Pct,
                             elapsedMs = System.currentTimeMillis() - startMs
                         )
                     )
@@ -292,7 +350,19 @@ class OnnxDiffusionEngine(
                         hiddenDim = hiddenDim,
                         effectiveGuidance = effectiveGuidance,
                         imageWidth = width,
-                        imageHeight = height
+                        imageHeight = height,
+                        onSecondPassStart = {
+                            val pass2Pct = 16 + (((stepIdx + 0.58f) / effectiveSteps.toFloat()) * 68f).toInt()
+                            onProgress(
+                                GenerationProgress(
+                                    stageTitle = "Denoising (Step ${stepIdx + 1}/$effectiveSteps • Pass 2/2)...",
+                                    currentStep = stepIdx + 1,
+                                    totalSteps = effectiveSteps,
+                                    percent = pass2Pct,
+                                    elapsedMs = System.currentTimeMillis() - startMs
+                                )
+                            )
+                        }
                     )
 
                     latents = scheduler.step(finalNoise, stepIdx, latents)
@@ -351,6 +421,7 @@ class OnnxDiffusionEngine(
             resolutionLabel = "$width × $height",
             durationMs = totalMs
         )
+        }
     }
 
     /**
@@ -374,8 +445,11 @@ class OnnxDiffusionEngine(
         seed: Long,
         onProgress: (GenerationProgress) -> Unit
     ): Result<ImageToImageResult> = runCatching {
-        cancelRequested.set(false)
-        val startMs = System.currentTimeMillis()
+        currentCoroutineContext().ensureActive()
+        generationMutex.withLock {
+            currentCoroutineContext().ensureActive()
+            cancelRequested.set(false)
+            val startMs = System.currentTimeMillis()
 
         // 1. Validate prompt with reference photo safety check
         val safetyCheck = MandatorySafetyGuard.validateRequest(
@@ -550,18 +624,23 @@ class OnnxDiffusionEngine(
                 val scheduler = DiffusionSchedulers.EulerSession(effectiveSteps)
                 var latents = scheduler.addNoise(cleanImageLatents, startStepIndex, seed)
                 var executed = 0
+                val twoPassCfg = effectiveGuidance > 1.15f && !unetRequiresStaticBatchTwo(unetSession)
 
                 for (stepIdx in startStepIndex until effectiveSteps) {
                     checkNotCancelled()
                     executed++
                     val t = scheduler.timesteps[stepIdx]
-                    val pct = 24 + ((executed.toFloat() / activeSteps.toFloat()) * 64f).toInt()
+                    val pass1Pct = 24 + (((executed - 0.8f) / activeSteps.toFloat()) * 64f).toInt()
                     onProgress(
                         GenerationProgress(
-                            stageTitle = "Transforming (Step $executed/$activeSteps)...",
+                            stageTitle = if (twoPassCfg) {
+                                "Transforming (Step $executed/$activeSteps • Pass 1/2)..."
+                            } else {
+                                "Transforming (Step $executed/$activeSteps)..."
+                            },
                             currentStep = executed,
                             totalSteps = activeSteps,
-                            percent = pct,
+                            percent = pass1Pct,
                             elapsedMs = System.currentTimeMillis() - startMs
                         )
                     )
@@ -579,7 +658,19 @@ class OnnxDiffusionEngine(
                         hiddenDim = hiddenDim,
                         effectiveGuidance = effectiveGuidance,
                         imageWidth = width,
-                        imageHeight = height
+                        imageHeight = height,
+                        onSecondPassStart = {
+                            val pass2Pct = 24 + (((executed - 0.4f) / activeSteps.toFloat()) * 64f).toInt()
+                            onProgress(
+                                GenerationProgress(
+                                    stageTitle = "Transforming (Step $executed/$activeSteps • Pass 2/2)...",
+                                    currentStep = executed,
+                                    totalSteps = activeSteps,
+                                    percent = pass2Pct,
+                                    elapsedMs = System.currentTimeMillis() - startMs
+                                )
+                            )
+                        }
                     )
 
                     latents = scheduler.step(finalNoise, stepIdx, latents)
@@ -640,6 +731,7 @@ class OnnxDiffusionEngine(
             resolutionLabel = "$width × $height",
             durationMs = totalMs
         )
+        }
     }
 
     private fun runVaeEncoder(
@@ -672,7 +764,7 @@ class OnnxDiffusionEngine(
         )
 
         inputTensor.use { tensor ->
-            vaeEncSession.run(mapOf(inputName to tensor)).use { results ->
+            runInterruptible(vaeEncSession, mapOf(inputName to tensor)).use { results ->
                 val outTensor = results[0] as OnnxTensor
                 val rawOut = extractFloatArray(outTensor)
 
@@ -715,31 +807,19 @@ class OnnxDiffusionEngine(
             .takeIf { it.exists() }
             ?.readText()
             .orEmpty()
-        if (sourceMeta.contains("lcm", ignoreCase = true)) {
-            return true
-        }
-        val schedulerCfgFile = File(modelManager.modelsRootDir, "tokenizer/scheduler_config.json")
-        if (schedulerCfgFile.exists()) {
-            val cfg = runCatching { schedulerCfgFile.readText() }.getOrDefault("")
-            if (cfg.contains("LCMScheduler", ignoreCase = true)) return true
-            if (cfg.contains("PNDMScheduler", ignoreCase = true) ||
-                cfg.contains("Euler", ignoreCase = true) ||
-                cfg.contains("DDIM", ignoreCase = true) ||
-                cfg.contains("LMSDiscrete", ignoreCase = true) ||
-                cfg.contains("DPMSolver", ignoreCase = true)
-            ) {
-                return false
-            }
-        }
         val companionBytes = unetFile.parentFile?.listFiles()
             ?.filter { it.isFile && it.absolutePath != unetFile.absolutePath && !it.name.endsWith(".meta") }
             ?.sumOf { it.length() } ?: 0L
         val totalUnetBytes = unetFile.length() + companionBytes
-        // Full 3.44 GB FP32 SD 1.5 export without timestep_cond or LCM metadata is standard SD 1.5
-        if (totalUnetBytes > 2_500_000_000L) {
-            return false
+        val schedulerCfgFile = File(modelManager.modelsRootDir, "tokenizer/scheduler_config.json")
+        val schedulerCfgText = schedulerCfgFile.takeIf { it.exists() }?.let {
+            runCatching { it.readText() }.getOrNull()
         }
-        return true
+        return isLikelyLcmByMetadataAndSize(
+            sourceMeta = sourceMeta,
+            totalUnetBytes = totalUnetBytes,
+            schedulerConfigText = schedulerCfgText
+        )
     }
 
     private fun requireCompleteSlotFile(slot: DiffusionModelSlot): File {
@@ -765,41 +845,64 @@ class OnnxDiffusionEngine(
             ?.filter { it.isFile && it.absolutePath != modelFile.absolutePath && !it.name.endsWith(".meta") }
             ?.sumOf { it.length() } ?: 0L
         val totalBytes = modelFile.length() + companionBytes
-        val isLargeExternalModel = totalBytes > 500L * 1024L * 1024L
-        val isUltraLargeModel = totalBytes > 1_200L * 1024L * 1024L
-        val cpuThreads = Runtime.getRuntime().availableProcessors().coerceIn(4, 6)
+        val isLargeExternalModel = totalBytes > 450L * 1024L * 1024L
+        val isUltraLargeModel = totalBytes > 1_500L * 1024L * 1024L
+        val perfThreads = computePerformanceThreadCount(Runtime.getRuntime().availableProcessors())
+
+        fun applyBaseTuning(opts: OrtSession.SessionOptions, optLevel: OrtSession.SessionOptions.OptLevel) {
+            opts.setOptimizationLevel(optLevel)
+            opts.setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+            opts.setInterOpNumThreads(1)
+            opts.setIntraOpNumThreads(perfThreads)
+            runCatching { opts.addConfigEntry("session.intra_op.allow_spinning", "0") }
+            if (isLargeExternalModel || lowRamMode) {
+                runCatching { opts.addConfigEntry("session.disable_prepacking", "1") }
+                opts.setCPUArenaAllocator(false)
+                opts.setMemoryPatternOptimization(false)
+            }
+        }
 
         if (preferNnapi && !isLargeExternalModel) {
             runCatching {
                 OrtSession.SessionOptions().use { opts ->
-                    opts.setOptimizationLevel(
+                    applyBaseTuning(
+                        opts,
                         if (lowRamMode) OrtSession.SessionOptions.OptLevel.BASIC_OPT
                         else OrtSession.SessionOptions.OptLevel.ALL_OPT
                     )
-                    opts.setIntraOpNumThreads(cpuThreads)
-                    if (lowRamMode) {
-                        opts.setCPUArenaAllocator(false)
-                        opts.setMemoryPatternOptimization(false)
-                    }
                     opts.addNnapi(EnumSet.noneOf(ai.onnxruntime.providers.NNAPIFlags::class.java))
                     return env.createSession(modelFile.absolutePath, opts)
                 }
             }
         }
+
+        // Fast ARM64 NEON/FP16 XNNPACK acceleration for self-contained Text Encoder & VAE models (< 550 MB)
+        if (!isLargeExternalModel && !lowRamMode) {
+            runCatching {
+                OrtSession.SessionOptions().use { opts ->
+                    applyBaseTuning(opts, OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                    opts.addXnnpack(mapOf("intra_op_num_threads" to perfThreads.toString()))
+                    return env.createSession(modelFile.absolutePath, opts)
+                }
+            }
+        }
+
+        // Primary CPU Execution Provider path: ALL_OPT + disable_prepacking for ~860 MB INT8 LCM UNet,
+        // BASIC_OPT + disable_prepacking for ultra-large >1.5 GB FP32 weights.pb
+        val targetOptLevel = when {
+            isUltraLargeModel || lowRamMode -> OrtSession.SessionOptions.OptLevel.BASIC_OPT
+            else -> OrtSession.SessionOptions.OptLevel.ALL_OPT
+        }
+        runCatching {
+            OrtSession.SessionOptions().use { opts ->
+                applyBaseTuning(opts, targetOptLevel)
+                return env.createSession(modelFile.absolutePath, opts)
+            }
+        }
+
+        // Ultimate safety fallback if any exotic custom graph node dislikes graph fusion
         OrtSession.SessionOptions().use { opts ->
-            // Ultra-large (>1.2 GB, e.g. 3.44 GB FP32 weights.pb) uses NO_OPT so ORT never
-            // duplicates gigabytes of external tensor initializers during constant folding.
-            val optLevel = when {
-                isUltraLargeModel -> OrtSession.SessionOptions.OptLevel.NO_OPT
-                isLargeExternalModel || lowRamMode -> OrtSession.SessionOptions.OptLevel.BASIC_OPT
-                else -> OrtSession.SessionOptions.OptLevel.ALL_OPT
-            }
-            opts.setOptimizationLevel(optLevel)
-            opts.setIntraOpNumThreads(cpuThreads)
-            if (isLargeExternalModel || lowRamMode) {
-                opts.setCPUArenaAllocator(false)
-                opts.setMemoryPatternOptimization(false)
-            }
+            applyBaseTuning(opts, OrtSession.SessionOptions.OptLevel.NO_OPT)
             return env.createSession(modelFile.absolutePath, opts)
         }
     }
@@ -823,7 +926,7 @@ class OnnxDiffusionEngine(
         }
 
         inputTensor.use { tensor ->
-            session.run(mapOf(inputName to tensor)).use { result ->
+            runInterruptible(session, mapOf(inputName to tensor)).use { result ->
                 val outTensor = result[0] as OnnxTensor
                 val floats = extractFloatArray(outTensor)
                 val outShape = (outTensor.info as? TensorInfo)?.shape
@@ -860,7 +963,8 @@ class OnnxDiffusionEngine(
         hiddenDim: Int,
         effectiveGuidance: Float,
         imageWidth: Int,
-        imageHeight: Int
+        imageHeight: Int,
+        onSecondPassStart: (() -> Unit)? = null
     ): FloatArray {
         if (effectiveGuidance > 1.15f && unetRequiresStaticBatchTwo(unetSession)) {
             return runUnetBatchedCfgTwo(
@@ -894,6 +998,7 @@ class OnnxDiffusionEngine(
         )
         return if (effectiveGuidance > 1.15f) {
             checkNotCancelled()
+            onSecondPassStart?.invoke()
             val uncondNoise = runUnetSingleBatch(
                 env = env,
                 unetSession = unetSession,
@@ -982,7 +1087,7 @@ class OnnxDiffusionEngine(
                 inputs[name] = tensor
             }
 
-            unetSession.run(inputs).use { results ->
+            runInterruptible(unetSession, inputs).use { results ->
                 val outTensor = results[0] as OnnxTensor
                 val raw = extractFloatArray(outTensor)
                 return if (raw.size >= latentSize * 2) {
@@ -1116,7 +1221,7 @@ class OnnxDiffusionEngine(
                 inputs[name] = tensor
             }
 
-            unetSession.run(inputs).use { results ->
+            runInterruptible(unetSession, inputs).use { results ->
                 val outTensor = results[0] as OnnxTensor
                 val raw = extractFloatArray(outTensor)
                 return if (batchCount == 2 && raw.size >= latentSize) {
@@ -1151,7 +1256,7 @@ class OnnxDiffusionEngine(
         )
 
         inputTensor.use { tensor ->
-            vaeSession.run(mapOf(inputName to tensor)).use { results ->
+            runInterruptible(vaeSession, mapOf(inputName to tensor)).use { results ->
                 val outTensor = results[0] as OnnxTensor
                 val outShape = (outTensor.info as? TensorInfo)?.shape
                 val rgbFloats = extractFloatArray(outTensor)
@@ -1272,6 +1377,51 @@ class OnnxDiffusionEngine(
     }
 
     companion object {
+        /**
+         * Matches optimal performance core count on mobile big.LITTLE SoCs (e.g., 4x Cortex-A78 on
+         * 8-core Snapdragon 6 Gen 1) so intra-op barriers never wait on slower Cortex-A55 cores.
+         */
+        fun computePerformanceThreadCount(availableProcessors: Int): Int = when {
+            availableProcessors >= 6 -> 4
+            availableProcessors >= 4 -> 4
+            else -> availableProcessors.coerceAtLeast(2)
+        }
+
+        fun isLikelyLcmByMetadataAndSize(
+            sourceMeta: String,
+            totalUnetBytes: Long,
+            schedulerConfigText: String?
+        ): Boolean {
+            if (sourceMeta.contains("lcm", ignoreCase = true) ||
+                sourceMeta.contains("int8", ignoreCase = true) ||
+                sourceMeta.contains("turbo", ignoreCase = true) ||
+                sourceMeta.contains("hyper", ignoreCase = true)
+            ) {
+                return true
+            }
+            // Full >2.3 GB FP32 SD 1.5 export without LCM metadata is standard SD 1.5
+            if (totalUnetBytes > 2_300_000_000L) {
+                return false
+            }
+            // Compact ~860 MB INT8 mobile UNet (e.g. model.onnx + model.onnx.data) is LCM-capable
+            // even if a leftover SD 1.5 PNDMScheduler config was present in the same folder
+            if (totalUnetBytes in 200_000_000L..1_450_000_000L) {
+                return true
+            }
+            if (!schedulerConfigText.isNullOrBlank()) {
+                if (schedulerConfigText.contains("LCMScheduler", ignoreCase = true)) return true
+                if (schedulerConfigText.contains("PNDMScheduler", ignoreCase = true) ||
+                    schedulerConfigText.contains("Euler", ignoreCase = true) ||
+                    schedulerConfigText.contains("DDIM", ignoreCase = true) ||
+                    schedulerConfigText.contains("LMSDiscrete", ignoreCase = true) ||
+                    schedulerConfigText.contains("DPMSolver", ignoreCase = true)
+                ) {
+                    return false
+                }
+            }
+            return true
+        }
+
         // Pure IEEE-754 Float32 <-> Float16 conversion (works across all Android APIs & JVM tests)
         fun floatToHalfBits(fval: Float): Short {
             val fbits = java.lang.Float.floatToIntBits(fval)

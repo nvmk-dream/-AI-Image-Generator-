@@ -99,6 +99,26 @@ enum class DiffusionModelSlot(
     )
 }
 
+enum class UnetVariant {
+    NONE,
+    FAST_LCM_INT8,
+    COMPACT_FP16,
+    HEAVY_FP32
+}
+
+enum class PreferredUnetImportMode {
+    AUTO_FAST_MOBILE,
+    FORCE_FAST_LCM,
+    FORCE_STANDARD_SD
+}
+
+data class FolderImportResult(
+    val importedSlots: List<DiffusionModelSlot>,
+    val dualUnetDetected: Boolean,
+    val selectedUnetVariant: UnetVariant,
+    val selectedUnetLabel: String
+)
+
 data class ModelSlotStatus(
     val slot: DiffusionModelSlot,
     val isInstalled: Boolean,
@@ -138,6 +158,39 @@ data class RealDeviceAndModelMetrics(
 
     val faceSwapSlots: List<ModelSlotStatus>
         get() = slots.filter { it.slot.isFaceSwapSlot }
+
+    val unetSlotStatus: ModelSlotStatus?
+        get() = slots.firstOrNull { it.slot == DiffusionModelSlot.UNET }
+
+    val unetVariant: UnetVariant
+        get() {
+            val u = unetSlotStatus ?: return UnetVariant.NONE
+            if (!u.isInstalled) return UnetVariant.NONE
+            return OnnxModelManager.classifyUnetVariant(u.sourceFileLabel, u.totalBytes)
+        }
+
+    fun activeUnetBadgeLabel(isTamil: Boolean): String {
+        val u = unetSlotStatus
+        if (u == null || !u.isInstalled) {
+            return if (isTamil) "UNet: இன்னும் ஏற்றப்படவில்லை" else "UNet: Not uploaded yet"
+        }
+        val sizeStr = OnnxModelManager.formatBytes(u.totalBytes)
+        val src = u.sourceFileLabel.ifBlank { u.slot.canonicalFileName }
+        return when (unetVariant) {
+            UnetVariant.FAST_LCM_INT8 ->
+                "⚡ Fast LCM UNet: $src ($sizeStr)"
+            UnetVariant.COMPACT_FP16 ->
+                "⚡ FP16 UNet: $src ($sizeStr)"
+            UnetVariant.HEAVY_FP32 ->
+                if (isTamil) {
+                    "🐢 மெதுவான FP32 UNet: $src ($sizeStr)"
+                } else {
+                    "🐢 Heavy FP32 UNet: $src ($sizeStr)"
+                }
+            UnetVariant.NONE ->
+                if (isTamil) "UNet: இன்னும் ஏற்றப்படவில்லை" else "UNet: Not uploaded yet"
+        }
+    }
 
     // Count of installed & complete core Diffusion models (0..4)
     val installedCount: Int
@@ -355,6 +408,9 @@ class OnnxModelManager(private val context: Context) {
         if (!originalNameHint.isNullOrBlank()) {
             File(targetDir, "source_name.meta").writeText(originalNameHint)
         }
+        if (slot == DiffusionModelSlot.UNET) {
+            File(modelsRootDir, "tokenizer/scheduler_config.json").delete()
+        }
         if (slot == DiffusionModelSlot.FACE_SWAPPER) {
             File(modelsRootDir, "inswapper_emap_512x512.bin").delete()
         }
@@ -412,16 +468,20 @@ class OnnxModelManager(private val context: Context) {
 
     /**
      * One-Touch Folder Upload (compatible with nested Hugging Face folders, flat SD 1.5 folders
-     * with model.onnx + weights.pb, quantized model.onnx + model.onnx.data, AND Face Swap models).
+     * with model.onnx + weights.pb, quantized model.onnx + model.onnx.data, dual-UNet folders,
+     * AND Face Swap models). Automatically prioritizes mobile-optimized Fast LCM (~860 MB) when
+     * both Fast LCM and 3.44 GB FP32 UNets exist in the same folder, unless [preferredUnetMode]
+     * explicitly requests Standard SD.
      */
     fun importAllModelsFromFolder(
         treeUri: Uri,
+        preferredUnetMode: PreferredUnetImportMode = PreferredUnetImportMode.AUTO_FAST_MOBILE,
         onProgress: (String) -> Unit
-    ): Result<List<DiffusionModelSlot>> = runCatching {
+    ): Result<FolderImportResult> = runCatching {
         val rootDoc = DocumentFile.fromTreeUri(context, treeUri)
             ?: error("Could not open selected folder.")
 
-        data class DiscoveredDoc(val parentName: String, val doc: DocumentFile)
+        data class DiscoveredDoc(val parentName: String, val doc: DocumentFile, val sizeBytes: Long)
 
         val allFiles = mutableListOf<DiscoveredDoc>()
         fun walk(dir: DocumentFile, parentLabel: String) {
@@ -429,7 +489,7 @@ class OnnxModelManager(private val context: Context) {
                 if (child.isDirectory) {
                     walk(child, child.name.orEmpty().lowercase(Locale.US))
                 } else if (child.isFile) {
-                    allFiles.add(DiscoveredDoc(parentLabel, child))
+                    allFiles.add(DiscoveredDoc(parentLabel, child, child.length()))
                 }
             }
         }
@@ -443,7 +503,8 @@ class OnnxModelManager(private val context: Context) {
                 CandidateModelFile(
                     index = idx,
                     fileName = normName,
-                    parentNameLower = entry.parentName
+                    parentNameLower = entry.parentName,
+                    fileSizeBytes = entry.sizeBytes
                 )
             } else {
                 null
@@ -454,16 +515,49 @@ class OnnxModelManager(private val context: Context) {
                 keySelector = { it.parentName },
                 valueTransform = { normalizeBrowserDuplicateName(it.doc.name.orEmpty()).lowercase(Locale.US) }
             )
+        val companionSizesByParent: Map<String, Map<String, Long>> = allFiles
+            .groupBy { it.parentName }
+            .mapValues { (_, entries) ->
+                entries.associate {
+                    normalizeBrowserDuplicateName(it.doc.name.orEmpty()).lowercase(Locale.US) to it.sizeBytes
+                }
+            }
 
-        val slotMatches = resolveFolderSlotMatches(candidates, allFileNamesByParent)
+        val dualUnetDetected = hasMultipleUnetCandidates(candidates, allFileNamesByParent)
+        val slotMatches = resolveFolderSlotMatches(
+            candidates = candidates,
+            allFileNamesByParent = allFileNamesByParent,
+            preferredUnetMode = preferredUnetMode,
+            companionSizesByParent = companionSizesByParent
+        )
         val importedSlots = mutableListOf<DiffusionModelSlot>()
+        var selectedUnetLabel = ""
+        var selectedUnetTotalBytes = 0L
 
         for ((slot, matchedIndex) in slotMatches) {
             val match = allFiles[matchedIndex]
             val origName = match.doc.name.orEmpty()
             val normOrigName = normalizeBrowserDuplicateName(origName)
             val labelName = origName.ifBlank { slot.canonicalFileName }
+            val onnxExpectedLen = match.sizeBytes
+
+            // Fast-path: skip re-copying non-UNet self-contained models that are already intact on disk
+            if (slot != DiffusionModelSlot.UNET) {
+                val existingOnnx = resolveExistingSlotFile(slot)
+                if (existingOnnx != null &&
+                    onnxExpectedLen > MAX_EXTERNAL_GRAPH_SHELL_BYTES &&
+                    existingOnnx.length() == onnxExpectedLen &&
+                    extractExternalDataLocations(existingOnnx).isEmpty() &&
+                    findMissingCompanionFiles(existingOnnx).isEmpty()
+                ) {
+                    onProgress("Verified $labelName (already on device ✓)")
+                    importedSlots.add(slot)
+                    continue
+                }
+            }
+
             onProgress("Copying $labelName...")
+            activeSessions.remove(slot)?.runCatching { close() }
 
             val destDir = slotDir(slot)
             destDir.listFiles()?.forEach { it.delete() }
@@ -475,7 +569,6 @@ class OnnxModelManager(private val context: Context) {
                 "model.onnx"
             }
             val destOnnx = File(destDir, storedName)
-            val onnxExpectedLen = match.doc.length()
             ensureEnoughFreeSpace(onnxExpectedLen)
             copyUriToFile(match.doc.uri, destOnnx, onnxExpectedLen) { copied, total ->
                 onProgress(formatCopyProgress(labelName, copied, total))
@@ -488,6 +581,7 @@ class OnnxModelManager(private val context: Context) {
             // Inspect the imported .onnx protobuf for exact external weight file locations
             val expectedLocations = extractExternalDataLocations(destOnnx)
             val copiedCompanionNames = mutableListOf<String>()
+            var copiedCompanionBytes = 0L
 
             if (expectedLocations.isNotEmpty()) {
                 for (expectedLoc in expectedLocations) {
@@ -516,13 +610,14 @@ class OnnxModelManager(private val context: Context) {
 
                     if (matchedCompanion != null) {
                         val compDest = File(destDir, expectedLoc)
-                        val compTotal = matchedCompanion.doc.length()
+                        val compTotal = matchedCompanion.sizeBytes
                         ensureEnoughFreeSpace(compTotal)
                         onProgress("Copying $expectedLoc (external weights)...")
                         copyUriToFile(matchedCompanion.doc.uri, compDest, compTotal) { copied, total ->
                             onProgress(formatCopyProgress(expectedLoc, copied, total))
                         }
                         copiedCompanionNames.add(expectedLoc)
+                        copiedCompanionBytes += compDest.length()
                     }
                 }
             } else {
@@ -542,13 +637,14 @@ class OnnxModelManager(private val context: Context) {
                 }.forEach { companion ->
                     val compName = normalizeBrowserDuplicateName(companion.doc.name ?: "model.onnx_data")
                     val compDest = File(destDir, compName)
-                    val compTotal = companion.doc.length()
+                    val compTotal = companion.sizeBytes
                     ensureEnoughFreeSpace(compTotal)
                     onProgress("Copying $compName (external weights)...")
                     copyUriToFile(companion.doc.uri, compDest, compTotal) { copied, total ->
                         onProgress(formatCopyProgress(compName, copied, total))
                     }
                     copiedCompanionNames.add(compName)
+                    copiedCompanionBytes += compDest.length()
                 }
             }
 
@@ -561,13 +657,23 @@ class OnnxModelManager(private val context: Context) {
                 File(destDir, "source_name.meta").writeText(labelToSave)
             }
 
+            if (slot == DiffusionModelSlot.UNET) {
+                selectedUnetLabel = labelToSave.ifBlank { slot.canonicalFileName }
+                selectedUnetTotalBytes = destOnnx.length() + copiedCompanionBytes
+            }
+
             if (destOnnx.exists() && destOnnx.length() > 1024L && findMissingCompanionFiles(destOnnx).isEmpty()) {
                 importedSlots.add(slot)
             }
         }
 
-        // Also copy tokenizer / scheduler config files if present in the selected folder
+        val chosenUnetVariant = classifyUnetVariant(selectedUnetLabel, selectedUnetTotalBytes)
+
+        // Copy tokenizer / scheduler config files if present, avoiding PNDMScheduler pollution on Fast LCM UNet
         val tokDestDir = File(modelsRootDir, "tokenizer").apply { if (!exists()) mkdirs() }
+        if (DiffusionModelSlot.UNET in importedSlots && chosenUnetVariant == UnetVariant.FAST_LCM_INT8) {
+            File(tokDestDir, "scheduler_config.json").delete()
+        }
         val configNames = setOf(
             "vocab.json",
             "merges.txt",
@@ -580,11 +686,28 @@ class OnnxModelManager(private val context: Context) {
             val normCfgName = normalizeBrowserDuplicateName(cfg.doc.name.orEmpty()).lowercase(Locale.US)
             if (normCfgName in configNames) {
                 val dest = File(tokDestDir, normCfgName)
-                copyUriToFile(cfg.doc.uri, dest)
+                if (normCfgName == "scheduler_config.json" && chosenUnetVariant == UnetVariant.FAST_LCM_INT8) {
+                    val tempScheduler = File(tokDestDir, "scheduler_config.tmp")
+                    runCatching {
+                        copyUriToFile(cfg.doc.uri, tempScheduler)
+                        val txt = tempScheduler.readText()
+                        if (txt.contains("LCMScheduler", ignoreCase = true)) {
+                            tempScheduler.copyTo(dest, overwrite = true)
+                        }
+                    }
+                    tempScheduler.delete()
+                } else {
+                    copyUriToFile(cfg.doc.uri, dest)
+                }
             }
         }
 
-        importedSlots
+        FolderImportResult(
+            importedSlots = importedSlots,
+            dualUnetDetected = dualUnetDetected,
+            selectedUnetVariant = chosenUnetVariant,
+            selectedUnetLabel = selectedUnetLabel
+        )
     }
 
     fun deleteSlotModel(slot: DiffusionModelSlot) {
@@ -687,7 +810,8 @@ class OnnxModelManager(private val context: Context) {
     data class CandidateModelFile(
         val index: Int,
         val fileName: String,
-        val parentNameLower: String
+        val parentNameLower: String,
+        val fileSizeBytes: Long = 0L
     ) {
         val fileNameLower: String
             get() = fileName.lowercase(Locale.US)
@@ -843,20 +967,145 @@ class OnnxModelManager(private val context: Context) {
             return false
         }
 
+        fun classifyUnetVariant(sourceFileLabel: String, totalBytes: Long): UnetVariant {
+            if (totalBytes <= 1024L) return UnetVariant.NONE
+            val lower = sourceFileLabel.lowercase(Locale.US)
+            if (totalBytes > 2_300_000_000L && !lower.contains("lcm")) {
+                return UnetVariant.HEAVY_FP32
+            }
+            if (lower.contains("lcm") ||
+                lower.contains("int8") ||
+                lower.contains(".onnx.data") ||
+                lower.contains(".onnx_data") ||
+                totalBytes <= 1_450_000_000L
+            ) {
+                return UnetVariant.FAST_LCM_INT8
+            }
+            return UnetVariant.COMPACT_FP16
+        }
+
+        private fun collectEligibleUnetCandidates(
+            candidates: List<CandidateModelFile>,
+            claimedNonUnetIndices: Set<Int>,
+            coreMatchedParents: Set<String>,
+            allFileNamesByParent: Map<String, List<String>>
+        ): List<CandidateModelFile> {
+            return candidates.filter { cand ->
+                if (cand.index in claimedNonUnetIndices) return@filter false
+                if (matchesSlot(DiffusionModelSlot.UNET, cand.fileNameLower, cand.parentNameLower)) {
+                    return@filter true
+                }
+                val normCand = normalizeBrowserDuplicateName(cand.fileNameLower).lowercase(Locale.US)
+                if (normCand == "model.onnx") {
+                    val siblings = allFileNamesByParent[cand.parentNameLower].orEmpty()
+                    val hasExternalWeights = siblings.any { isCompanionWeightFileName(it) }
+                    val sharesDiffusionFolder = cand.parentNameLower in coreMatchedParents
+                    hasExternalWeights || sharesDiffusionFolder
+                } else {
+                    false
+                }
+            }
+        }
+
+        fun hasMultipleUnetCandidates(
+            candidates: List<CandidateModelFile>,
+            allFileNamesByParent: Map<String, List<String>>
+        ): Boolean {
+            val claimed = HashSet<Int>()
+            val coreParents = HashSet<String>()
+            for (slot in DiffusionModelSlot.entries) {
+                if (slot == DiffusionModelSlot.UNET) continue
+                val found = candidates.firstOrNull { cand ->
+                    cand.index !in claimed && matchesSlot(slot, cand.fileNameLower, cand.parentNameLower)
+                }
+                if (found != null) {
+                    claimed.add(found.index)
+                    if (!slot.isFaceSwapSlot) coreParents.add(found.parentNameLower)
+                }
+            }
+            return collectEligibleUnetCandidates(candidates, claimed, coreParents, allFileNamesByParent).size >= 2
+        }
+
+        private fun scoreUnetCandidate(
+            cand: CandidateModelFile,
+            allFileNamesByParent: Map<String, List<String>>,
+            companionSizesByParent: Map<String, Map<String, Long>>,
+            preferredUnetMode: PreferredUnetImportMode
+        ): Int {
+            val normCand = normalizeBrowserDuplicateName(cand.fileNameLower).lowercase(Locale.US)
+            val stem = normCand.removeSuffix(".onnx")
+            val siblings = allFileNamesByParent[cand.parentNameLower].orEmpty()
+            val compSizes = companionSizesByParent[cand.parentNameLower].orEmpty()
+
+            val hasLcmOrInt8Keyword = normCand.contains("lcm") ||
+                normCand.contains("int8") ||
+                cand.parentNameLower.contains("lcm") ||
+                cand.parentNameLower.contains("int8")
+
+            val stemDataNames = listOf(
+                "${normCand}.data",
+                "${normCand}_data",
+                "${stem}.onnx.data",
+                "${stem}.onnx_data"
+            )
+            val matchedStemData = siblings.firstOrNull { it in stemDataNames }
+            val stemDataBytes = matchedStemData?.let { compSizes[it] } ?: 0L
+            val weightsPbBytes = compSizes["weights.pb"] ?: compSizes["${stem}_weights.pb"] ?: 0L
+
+            val estimatedTotalBytes = when {
+                stemDataBytes > 0L -> cand.fileSizeBytes + stemDataBytes
+                cand.fileSizeBytes > MAX_EXTERNAL_GRAPH_SHELL_BYTES -> cand.fileSizeBytes
+                weightsPbBytes > 0L -> cand.fileSizeBytes + weightsPbBytes
+                else -> cand.fileSizeBytes
+            }
+
+            val isFastCompactUnet = hasLcmOrInt8Keyword ||
+                (matchedStemData != null && (stemDataBytes == 0L || stemDataBytes <= 1_600_000_000L)) ||
+                (estimatedTotalBytes in 200_000_000L..1_600_000_000L)
+
+            val isHeavyFp32Unet = estimatedTotalBytes > 2_300_000_000L ||
+                (matchedStemData == null && normCand == "unet.onnx" && "weights.pb" in siblings)
+
+            return when (preferredUnetMode) {
+                PreferredUnetImportMode.AUTO_FAST_MOBILE,
+                PreferredUnetImportMode.FORCE_FAST_LCM -> {
+                    when {
+                        hasLcmOrInt8Keyword -> 100
+                        isFastCompactUnet -> 90
+                        !isHeavyFp32Unet -> 50
+                        else -> 20
+                    }
+                }
+                PreferredUnetImportMode.FORCE_STANDARD_SD -> {
+                    when {
+                        isHeavyFp32Unet -> 100
+                        normCand == "unet.onnx" -> 90
+                        else -> 30
+                    }
+                }
+            }
+        }
+
         /**
-         * Resolves all slots in 2 passes:
-         * Pass 1: Explicit filename or parent-subfolder matches.
-         * Pass 2: Flat-folder fallback — if UNET wasn't explicitly named unet.onnx, an unclaimed
-         *         model.onnx alongside weights.pb / .onnx_data or sibling Diffusion models is UNET!
+         * Resolves all slots cleanly:
+         * 1. Non-UNet slots claim their explicit matches first so subfolders like text_encoder/model.onnx
+         *    are never mistaken for UNet.
+         * 2. All eligible UNet candidates (both explicit unet.onnx and flat-folder model.onnx + companion
+         *    weights) are evaluated together and ranked by [preferredUnetMode] — automatically preferring
+         *    fast ~860 MB LCM INT8 models over slow 3.44 GB FP32 weights.pb when both exist in one folder!
          */
         fun resolveFolderSlotMatches(
             candidates: List<CandidateModelFile>,
-            allFileNamesByParent: Map<String, List<String>>
+            allFileNamesByParent: Map<String, List<String>>,
+            preferredUnetMode: PreferredUnetImportMode = PreferredUnetImportMode.AUTO_FAST_MOBILE,
+            companionSizesByParent: Map<String, Map<String, Long>> = emptyMap()
         ): Map<DiffusionModelSlot, Int> {
             val matched = LinkedHashMap<DiffusionModelSlot, Int>()
             val claimedIndices = HashSet<Int>()
 
+            // Step 1: Match all non-UNet slots first
             for (slot in DiffusionModelSlot.entries) {
+                if (slot == DiffusionModelSlot.UNET) continue
                 val found = candidates.firstOrNull { cand ->
                     cand.index !in claimedIndices &&
                         matchesSlot(slot, cand.fileNameLower, cand.parentNameLower)
@@ -867,27 +1116,30 @@ class OnnxModelManager(private val context: Context) {
                 }
             }
 
-            if (DiffusionModelSlot.UNET !in matched) {
-                val coreMatchedParents = matched.entries
-                    .filter { !it.key.isFaceSwapSlot }
-                    .mapNotNull { entry -> candidates.firstOrNull { it.index == entry.value }?.parentNameLower }
-                    .toSet()
+            // Step 2: Gather all eligible UNet candidates and pick best match per preferredUnetMode
+            val coreMatchedParents = matched.entries
+                .filter { !it.key.isFaceSwapSlot }
+                .mapNotNull { entry -> candidates.firstOrNull { it.index == entry.value }?.parentNameLower }
+                .toSet()
 
-                val fallbackUnet = candidates.firstOrNull { cand ->
-                    val normCand = normalizeBrowserDuplicateName(cand.fileNameLower)
-                    if (cand.index in claimedIndices || normCand != "model.onnx") {
-                        false
-                    } else {
-                        val siblings = allFileNamesByParent[cand.parentNameLower].orEmpty()
-                        val hasExternalWeights = siblings.any { isCompanionWeightFileName(it) }
-                        val sharesDiffusionFolder = cand.parentNameLower in coreMatchedParents
-                        hasExternalWeights || sharesDiffusionFolder
-                    }
-                }
-                if (fallbackUnet != null) {
-                    matched[DiffusionModelSlot.UNET] = fallbackUnet.index
-                    claimedIndices.add(fallbackUnet.index)
-                }
+            val unetCandidates = collectEligibleUnetCandidates(
+                candidates = candidates,
+                claimedNonUnetIndices = claimedIndices,
+                coreMatchedParents = coreMatchedParents,
+                allFileNamesByParent = allFileNamesByParent
+            )
+
+            val bestUnet = unetCandidates.maxByOrNull { cand ->
+                scoreUnetCandidate(
+                    cand = cand,
+                    allFileNamesByParent = allFileNamesByParent,
+                    companionSizesByParent = companionSizesByParent,
+                    preferredUnetMode = preferredUnetMode
+                )
+            }
+            if (bestUnet != null) {
+                matched[DiffusionModelSlot.UNET] = bestUnet.index
+                claimedIndices.add(bestUnet.index)
             }
 
             return matched

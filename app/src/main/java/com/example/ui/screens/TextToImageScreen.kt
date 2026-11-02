@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -44,6 +45,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -65,6 +67,7 @@ import coil.compose.AsyncImage
 import com.example.ai.GenerationProgress
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.ai.SamplerType
+import com.example.ai.UnetVariant
 import com.example.data.AppPreferencesState
 import com.example.data.GeneratedCreation
 import com.example.ui.components.CircularGlowIconButton
@@ -76,7 +79,9 @@ import com.example.ui.theme.PinkGlowStart
 import com.example.ui.theme.PurpleActionEnd
 import com.example.ui.theme.PurpleActionStart
 import com.example.ui.theme.VibrantPinkPill
+import kotlinx.coroutines.delay
 import java.io.File
+import java.util.Locale
 import kotlin.random.Random
 
 @Composable
@@ -88,6 +93,10 @@ fun TextToImageScreen(
     progress: GenerationProgress?,
     latestCreation: GeneratedCreation?,
     errorMessage: String?,
+    isImportingModels: Boolean = false,
+    importProgressText: String? = null,
+    onQuickSwitchToFastLcmFolder: () -> Unit = {},
+    onResolutionChange: (String) -> Unit = {},
     onUserPromptChange: (String) -> Unit,
     onGenerate: (sampler: SamplerType, steps: Int, guidanceScale: Float, seed: Long, negativePrompt: String) -> Unit,
     onCancelGeneration: () -> Unit,
@@ -113,6 +122,20 @@ fun TextToImageScreen(
         mutableStateOf("blurry, low quality, deformed hands, distorted face, extra limbs")
     }
     var showSafetyCombinedPreview by remember { mutableStateOf(false) }
+    var liveElapsedSec by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(isGenerating) {
+        if (isGenerating) {
+            val startedAt = System.currentTimeMillis()
+            liveElapsedSec = 0
+            while (true) {
+                delay(1000L)
+                liveElapsedSec = ((System.currentTimeMillis() - startedAt) / 1000L).toInt()
+            }
+        } else {
+            liveElapsedSec = 0
+        }
+    }
 
     val finalCombinedPrompt = preferences.buildFinalGenerationInput(userPrompt)
 
@@ -171,6 +194,110 @@ fun TextToImageScreen(
                         contentDescription = "Safety Prompt",
                         tint = Color.White
                     )
+                }
+            }
+
+            // Active UNet Status + Quick Resolution Strip (384×384 Fast vs 512×512 HD)
+            FrostedGlassCard(darkTheme = darkTheme) {
+                val isSlowFp32 = metrics.unetVariant == UnetVariant.HEAVY_FP32
+                Text(
+                    text = metrics.activeUnetBadgeLabel(isTamil),
+                    color = if (isSlowFp32 && !darkTheme) Color(0xFFE65100) else textColor,
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold)
+                )
+
+                if (isSlowFp32) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (isTamil) {
+                            "⚠️ தற்போது 3.44 GB (weights.pb) மாடல் உள்ளது — CPU-வில் 1 Step முடிய ~3 நிமிடம் ஆகும்! உங்கள் Folder-ல் உள்ள வேகமான ~860 MB Fast LCM மாடலுக்கு மாற்ற கீழே தட்டவும்:"
+                        } else {
+                            "⚠️ Slow 3.44 GB FP32 UNet is loaded (~3 min/step on CPU). Switch to your ~860 MB Fast LCM model in 1 tap:"
+                        },
+                        color = subColor,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .minimumInteractiveComponentSize()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Brush.horizontalGradient(listOf(PinkGlowStart, VibrantPinkPill)))
+                            .border(1.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(14.dp))
+                            .clickable(enabled = !isGenerating && !isImportingModels) {
+                                onQuickSwitchToFastLcmFolder()
+                            }
+                            .padding(vertical = 9.dp, horizontal = 12.dp)
+                            .testTag("txt2img_switch_to_fast_lcm_button")
+                    ) {
+                        if (isImportingModels) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                strokeWidth = 2.2.dp,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text(
+                            text = if (isImportingModels) {
+                                importProgressText ?: "Importing Fast LCM..."
+                            } else if (isTamil) {
+                                "⚡ Fast LCM (~860 MB) மாடலுக்கு மாற்றுக (Folder)"
+                            } else {
+                                "⚡ Switch to Fast LCM (~860 MB) from Folder"
+                            },
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = if (isTamil) "வேகம் / அளவு:" else "Speed / Size:",
+                        color = subColor,
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                    listOf("384 × 384" to "⚡ 384×384 Fast", "512 × 512" to "✨ 512×512 HD").forEach { (resVal, resLabel) ->
+                        val activeRes = preferences.resolution == resVal
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .minimumInteractiveComponentSize()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (activeRes) {
+                                        Brush.horizontalGradient(listOf(PurpleActionStart, PurpleActionEnd))
+                                    } else {
+                                        Brush.horizontalGradient(
+                                            listOf(
+                                                Color.White.copy(alpha = if (darkTheme) 0.14f else 0.6f),
+                                                Color.White.copy(alpha = if (darkTheme) 0.08f else 0.5f)
+                                            )
+                                        )
+                                    }
+                                )
+                                .border(1.dp, Color.White.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                                .clickable(enabled = !isGenerating) { onResolutionChange(resVal) }
+                                .padding(vertical = 6.dp, horizontal = 8.dp)
+                                .testTag("quick_res_${resVal.substringBefore(" ")}")
+                        ) {
+                            Text(
+                                text = resLabel,
+                                color = if (activeRes) Color.White else textColor,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -374,6 +501,8 @@ fun TextToImageScreen(
                 if (isGenerating) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         val pct = (progress?.percent ?: 5).coerceIn(1, 100)
+                        val displaySec = maxOf(liveElapsedSec, ((progress?.elapsedMs ?: 0L) / 1000L).toInt())
+                        val timerText = String.format(Locale.US, "%02d:%02ds", displaySec / 60, displaySec % 60)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
@@ -385,9 +514,9 @@ fun TextToImageScreen(
                                 modifier = Modifier.weight(1f)
                             )
                             Text(
-                                text = "$pct%",
+                                text = "⏱ $timerText • $pct%",
                                 color = VibrantPinkPill,
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold)
                             )
                         }
                         Spacer(modifier = Modifier.height(6.dp))

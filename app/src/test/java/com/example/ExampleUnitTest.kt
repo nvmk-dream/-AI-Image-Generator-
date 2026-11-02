@@ -353,5 +353,84 @@ class ExampleUnitTest {
         assertTrue(allLinks.any { it.url.endsWith("/unet/model.onnx.data") })
         assertTrue(allLinks.any { it.url.endsWith("/unet/weights.pb") })
     }
+
+    @Test
+    fun dualUnetFolder_prioritizesFastLcmByDefaultAndRespectsStandardOverride() {
+        val parent = "image generator"
+        val candidates = listOf(
+            com.example.ai.OnnxModelManager.CandidateModelFile(0, "text_encoder.onnx", parent, 492_540_000L),
+            com.example.ai.OnnxModelManager.CandidateModelFile(1, "unet.onnx", parent, 1_750_000L),
+            com.example.ai.OnnxModelManager.CandidateModelFile(2, "model.onnx", parent, 2_150_000L),
+            com.example.ai.OnnxModelManager.CandidateModelFile(3, "vae_decoder.onnx", parent, 198_080_000L),
+            com.example.ai.OnnxModelManager.CandidateModelFile(4, "vae_encoder.onnx", parent, 136_760_000L)
+        )
+        val siblings = mapOf(
+            parent to listOf(
+                "text_encoder.onnx",
+                "unet.onnx",
+                "weights.pb",
+                "model.onnx",
+                "model.onnx.data",
+                "vae_decoder.onnx",
+                "vae_encoder.onnx",
+                "scheduler_config.json"
+            )
+        )
+        val companionSizes = mapOf(
+            parent to mapOf(
+                "weights.pb" to 3_438_000_000L,
+                "model.onnx.data" to 859_800_000L
+            )
+        )
+
+        assertTrue(com.example.ai.OnnxModelManager.hasMultipleUnetCandidates(candidates, siblings))
+
+        // Default AUTO_FAST_MOBILE must select ~860 MB Fast LCM (index 2: model.onnx) over 3.44 GB unet.onnx!
+        val fastResolved = com.example.ai.OnnxModelManager.resolveFolderSlotMatches(
+            candidates = candidates,
+            allFileNamesByParent = siblings,
+            preferredUnetMode = com.example.ai.PreferredUnetImportMode.AUTO_FAST_MOBILE,
+            companionSizesByParent = companionSizes
+        )
+        assertEquals(2, fastResolved[com.example.ai.DiffusionModelSlot.UNET])
+        assertEquals(0, fastResolved[com.example.ai.DiffusionModelSlot.TEXT_ENCODER])
+        assertEquals(3, fastResolved[com.example.ai.DiffusionModelSlot.VAE_DECODER])
+        assertEquals(4, fastResolved[com.example.ai.DiffusionModelSlot.VAE_ENCODER])
+
+        // Explicit FORCE_STANDARD_SD selects 3.44 GB Standard SD (index 1: unet.onnx)
+        val standardResolved = com.example.ai.OnnxModelManager.resolveFolderSlotMatches(
+            candidates = candidates,
+            allFileNamesByParent = siblings,
+            preferredUnetMode = com.example.ai.PreferredUnetImportMode.FORCE_STANDARD_SD,
+            companionSizesByParent = companionSizes
+        )
+        assertEquals(1, standardResolved[com.example.ai.DiffusionModelSlot.UNET])
+    }
+
+    @Test
+    fun lcmDetectorAndThreadTuner_detectsFastLcmDespiteLeftoverPndmSchedulerAndUsesFourBigCores() {
+        assertEquals(4, OnnxDiffusionEngine.computePerformanceThreadCount(8))
+        assertEquals(4, OnnxDiffusionEngine.computePerformanceThreadCount(6))
+        assertEquals(2, OnnxDiffusionEngine.computePerformanceThreadCount(2))
+
+        // ~860 MB model.onnx + model.onnx.data is recognized as LCM-capable even if PNDMScheduler JSON existed
+        assertTrue(
+            OnnxDiffusionEngine.isLikelyLcmByMetadataAndSize(
+                sourceMeta = "model.onnx + model.onnx.data",
+                totalUnetBytes = 862_000_000L,
+                schedulerConfigText = """{"_class_name": "PNDMScheduler"}"""
+            )
+        )
+
+        // 3.44 GB unet.onnx + weights.pb is recognized as Standard SD 1.5 (not LCM)
+        assertFalse(
+            OnnxDiffusionEngine.isLikelyLcmByMetadataAndSize(
+                sourceMeta = "unet.onnx + weights.pb",
+                totalUnetBytes = 3_440_000_000L,
+                schedulerConfigText = """{"_class_name": "PNDMScheduler"}"""
+            )
+        )
+    }
 }
+
 

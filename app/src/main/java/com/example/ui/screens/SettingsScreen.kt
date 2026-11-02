@@ -296,7 +296,7 @@ fun SettingsScreen(
                     iconTint = Color(0xFF3F51B5),
                     label = "Resolution",
                     selectedValue = preferences.resolution,
-                    options = listOf("512 × 512", "640 × 640", "768 × 768"),
+                    options = listOf("384 × 384", "512 × 512", "640 × 640", "768 × 768"),
                     textColor = primaryTextColor,
                     darkTheme = darkTheme,
                     testTag = "dropdown_resolution",

@@ -29,6 +29,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ai.DiffusionModelSlot
+import com.example.ai.PreferredUnetImportMode
 import com.example.ui.ActiveScreen
 import com.example.ui.AppViewModel
 import com.example.ui.BottomNavTab
@@ -73,11 +74,14 @@ fun ImageGeneratorRoot(
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingSlotForSingleImport by remember { mutableStateOf(DiffusionModelSlot.TEXT_ENCODER) }
     var pendingSlotForCompanionImport by remember { mutableStateOf(DiffusionModelSlot.UNET) }
+    var pendingFolderUnetMode by remember { mutableStateOf<PreferredUnetImportMode?>(null) }
     var photoPickTarget by remember { mutableStateOf(PhotoPickTarget.IMG2IMG_REFERENCE) }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { treeUri ->
+        val modeOverride = pendingFolderUnetMode
+        pendingFolderUnetMode = null
         if (treeUri != null) {
             runCatching {
                 context.contentResolver.takePersistableUriPermission(
@@ -85,7 +89,7 @@ fun ImageGeneratorRoot(
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             }
-            appViewModel.importAllModelsFromFolder(treeUri)
+            appViewModel.importAllModelsFromFolder(treeUri, modeOverride = modeOverride)
         }
     }
 
@@ -224,7 +228,16 @@ fun ImageGeneratorRoot(
                                         isImporting = uiState.isImportingModels,
                                         importProgressText = uiState.importProgressText,
                                         verificationReport = uiState.onnxVerificationReport,
+                                        preferredUnetMode = uiState.preferredUnetMode,
+                                        onSelectPreferredUnetMode = appViewModel::setPreferredUnetImportMode,
+                                        onSwitchUnetFromFolder = { mode ->
+                                            if (!appViewModel.switchUnetFromSavedFolder(mode)) {
+                                                pendingFolderUnetMode = mode
+                                                folderPickerLauncher.launch(null)
+                                            }
+                                        },
                                         onOneTouchFolderUpload = {
+                                            pendingFolderUnetMode = null
                                             folderPickerLauncher.launch(null)
                                         },
                                         onVerifyPipeline = appViewModel::verifyOnnxPipeline,
@@ -285,6 +298,15 @@ fun ImageGeneratorRoot(
                                 progress = uiState.generationProgress,
                                 latestCreation = uiState.latestGeneratedCreation,
                                 errorMessage = uiState.generationErrorMessage,
+                                isImportingModels = uiState.isImportingModels,
+                                importProgressText = uiState.importProgressText,
+                                onQuickSwitchToFastLcmFolder = {
+                                    if (!appViewModel.switchUnetFromSavedFolder(PreferredUnetImportMode.FORCE_FAST_LCM)) {
+                                        pendingFolderUnetMode = PreferredUnetImportMode.FORCE_FAST_LCM
+                                        folderPickerLauncher.launch(null)
+                                    }
+                                },
+                                onResolutionChange = appViewModel::setResolution,
                                 onUserPromptChange = appViewModel::updateUserImagePrompt,
                                 onGenerate = appViewModel::generateOfflineTextToImage,
                                 onCancelGeneration = appViewModel::cancelGeneration,

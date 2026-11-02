@@ -11,8 +11,10 @@ import com.example.ai.OfflineFaceSwapEngine
 import com.example.ai.OfflineImageEditorEngine
 import com.example.ai.OnnxDiffusionEngine
 import com.example.ai.OnnxModelManager
+import com.example.ai.PreferredUnetImportMode
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.ai.SamplerType
+import com.example.ai.UnetVariant
 import com.example.data.AppLanguage
 import com.example.data.AppPreferencesRepository
 import com.example.data.AppPreferencesState
@@ -65,6 +67,9 @@ data class ImageGeneratorUiState(
     val isImportingModels: Boolean = false,
     val importProgressText: String? = null,
     val onnxVerificationReport: String? = null,
+    val preferredUnetMode: PreferredUnetImportMode = PreferredUnetImportMode.AUTO_FAST_MOBILE,
+    val lastModelFolderUri: Uri? = null,
+    val dualUnetDetectedInFolder: Boolean = false,
     val isGenerating: Boolean = false,
     val generationProgress: GenerationProgress? = null,
     val generationErrorMessage: String? = null,
@@ -97,6 +102,9 @@ private data class TransientUiState(
     val isImportingModels: Boolean = false,
     val importProgressText: String? = null,
     val onnxVerificationReport: String? = null,
+    val preferredUnetMode: PreferredUnetImportMode = PreferredUnetImportMode.AUTO_FAST_MOBILE,
+    val lastModelFolderUri: Uri? = null,
+    val dualUnetDetectedInFolder: Boolean = false,
     val isGenerating: Boolean = false,
     val generationProgress: GenerationProgress? = null,
     val generationErrorMessage: String? = null,
@@ -158,6 +166,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             isImportingModels = transient.isImportingModels,
             importProgressText = transient.importProgressText,
             onnxVerificationReport = transient.onnxVerificationReport,
+            preferredUnetMode = transient.preferredUnetMode,
+            lastModelFolderUri = transient.lastModelFolderUri,
+            dualUnetDetectedInFolder = transient.dualUnetDetectedInFolder,
             isGenerating = transient.isGenerating,
             generationProgress = transient.generationProgress,
             generationErrorMessage = transient.generationErrorMessage,
@@ -803,21 +814,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelGeneration() {
         diffusionEngine.requestCancel()
-        activeGenerationJob?.cancel()
+        val jobToCancel = activeGenerationJob
         activeGenerationJob = null
+        transientState.update {
+            it.copy(
+                isGenerating = false,
+                generationProgress = null,
+                generationErrorMessage = null,
+                statusToastMessage = if (uiState.value.preferences.isTamil) {
+                    "உடனடியாக நிறுத்தப்பட்டு RAM விடுவிக்கப்பட்டது."
+                } else {
+                    "Cancelled & RAM freed."
+                }
+            )
+        }
         viewModelScope.launch {
+            runCatching { jobToCancel?.cancel() }
+            runCatching { jobToCancel?.join() }
             val updated = withContext(Dispatchers.IO) {
                 modelManager.unloadSessionsFromRam()
                 modelManager.inspectCurrentMetrics()
             }
-            transientState.update {
-                it.copy(
-                    isGenerating = false,
-                    generationProgress = null,
-                    metrics = updated,
-                    statusToastMessage = "Cancelled & RAM freed."
-                )
-            }
+            transientState.update { it.copy(metrics = updated) }
         }
     }
 
@@ -868,11 +886,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setPreferredUnetImportMode(mode: PreferredUnetImportMode) {
+        transientState.update { it.copy(preferredUnetMode = mode) }
+    }
+
+    fun switchUnetFromSavedFolder(mode: PreferredUnetImportMode): Boolean {
+        val savedUri = transientState.value.lastModelFolderUri ?: return false
+        importAllModelsFromFolder(savedUri, modeOverride = mode)
+        return true
+    }
+
     // Model & Cache Management
-    fun importAllModelsFromFolder(treeUri: Uri) {
+    fun importAllModelsFromFolder(
+        treeUri: Uri,
+        modeOverride: PreferredUnetImportMode? = null
+    ) {
+        val chosenMode = modeOverride ?: transientState.value.preferredUnetMode
         viewModelScope.launch {
             transientState.update {
                 it.copy(
+                    preferredUnetMode = chosenMode,
+                    lastModelFolderUri = treeUri,
                     isImportingModels = true,
                     importProgressText = "Scanning selected folder...",
                     statusToastMessage = null,
@@ -880,18 +914,38 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             val result = withContext(Dispatchers.IO) {
-                modelManager.importAllModelsFromFolder(treeUri) { progress ->
+                modelManager.importAllModelsFromFolder(
+                    treeUri = treeUri,
+                    preferredUnetMode = chosenMode
+                ) { progress ->
                     transientState.update { s -> s.copy(importProgressText = progress) }
                 }
             }
             val updatedMetrics = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
+            val isTamil = uiState.value.preferences.isTamil
             result.fold(
-                onSuccess = { imported ->
+                onSuccess = { importRes ->
+                    val imported = importRes.importedSlots
                     val incompleteWarning = updatedMetrics.incompleteSlots.firstOrNull()?.let { inc ->
                         " ⚠️ ${inc.slot.canonicalFileName} is missing ${inc.missingCompanionFiles.joinToString()} (See Settings → ONNX Model Download Links)."
                     }.orEmpty()
+                    val unetNote = when {
+                        importRes.dualUnetDetected && importRes.selectedUnetVariant == UnetVariant.FAST_LCM_INT8 ->
+                            if (isTamil) {
+                                " ⚡ Folder-ல் 2 UNet இருந்ததால் வேகமான Fast LCM (${importRes.selectedUnetLabel}) தேர்வு செய்யப்பட்டது!"
+                            } else {
+                                " ⚡ Auto-selected Fast LCM (${importRes.selectedUnetLabel}) from 2 UNets in folder!"
+                            }
+                        importRes.selectedUnetLabel.isNotBlank() ->
+                            " [UNet: ${importRes.selectedUnetLabel}]"
+                        else -> ""
+                    }
                     val msg = if (imported.isNotEmpty()) {
-                        "Imported ${imported.size} complete ONNX model(s): ${imported.joinToString { it.canonicalFileName }}.$incompleteWarning"
+                        if (isTamil) {
+                            "✅ ${imported.size} ONNX மாடல்கள் தயார்!$unetNote$incompleteWarning"
+                        } else {
+                            "Imported ${imported.size} complete ONNX model(s).$unetNote$incompleteWarning"
+                        }
                     } else if (incompleteWarning.isNotEmpty()) {
                         incompleteWarning.trim()
                     } else {
@@ -900,6 +954,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     transientState.update {
                         it.copy(
                             metrics = updatedMetrics,
+                            dualUnetDetectedInFolder = importRes.dualUnetDetected,
                             isImportingModels = false,
                             importProgressText = null,
                             statusToastMessage = msg
