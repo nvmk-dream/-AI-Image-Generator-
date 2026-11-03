@@ -416,4 +416,124 @@ class OnnxQuantGraphRepairerTest {
             )
         )
     }
+
+    @Test
+    fun nodeProtoWireFormat_preservesBinaryAttributesInField5AndDomainInField7_andPreventsDoubleFlipOnSlot1ARefresh() {
+        val dir = Files.createTempDirectory("lcm_proto_wire_").toFile()
+        try {
+            // Build binary Constant attribute containing non-UTF8 bytes (0xFF, 0xA0) that previously turned into 0xEFBFBD
+            val nonUtf8ConstantAttr = byteArrayOf(
+                0x0A, 0x05, 'v'.code.toByte(), 'a'.code.toByte(), 'l'.code.toByte(), 'u'.code.toByte(), 'e'.code.toByte(),
+                0x2A, 0x0C, 0x10, 0x07, 0x4A, 0x08,
+                0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
+                0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
+                0xA0.toByte(), 0x01, 0x04
+            )
+            val attrGroup = OnnxProtoCodec.buildIntAttributeRaw("group", 1L)
+            val attrKernel = OnnxProtoCodec.buildIntAttributeRaw("kernel_shape", 3L)
+
+            val extName = "model_int8.onnx.data"
+            val extFile = File(dir, extName)
+            val origConvBytes = byteArrayOf(-128, -64, -1, 0, 1, 42, 99, 127)
+            extFile.writeBytes(origConvBytes)
+
+            fun buildCleanGraphModel(): ByteArray {
+                val convW = OnnxTensorProto(
+                    dims = mutableListOf(2L, 1L, 2L, 2L),
+                    dataType = DT_INT8,
+                    name = "conv_in.weight_quantized",
+                    externalData = mutableListOf(
+                        OnnxExternalEntry("location", extName),
+                        OnnxExternalEntry("offset", "0"),
+                        OnnxExternalEntry("length", "8")
+                    ),
+                    dataLocation = OnnxProtoCodec.DATA_LOC_EXTERNAL
+                )
+                val zpInit = OnnxProtoCodec.create8BitInitializer("conv_in.weight_zero_point", DT_INT8, longArrayOf(), byteArrayOf(0))
+                val constNode = OnnxNodeProto(
+                    outputs = mutableListOf("/Constant_3_output_0"),
+                    name = "/Constant_3",
+                    opType = "Constant",
+                    attributesRaw = mutableListOf(nonUtf8ConstantAttr)
+                )
+                val convNode = OnnxNodeProto(
+                    inputs = mutableListOf("x_q", "conv_in.weight_quantized", "x_zp", "conv_in.weight_zero_point"),
+                    outputs = mutableListOf("y_i32"),
+                    name = "/conv_in/Conv_quant",
+                    opType = "ConvInteger",
+                    domain = "ai.onnx",
+                    attributesRaw = mutableListOf(attrGroup, attrKernel)
+                )
+                return OnnxProtoCodec.serializeModel(
+                    OnnxModelProto(
+                        irVersion = 7L,
+                        opsets = mutableListOf(OnnxOpsetProto("", 14L)),
+                        graph = OnnxGraphProto(
+                            name = "fast_lcm_unet",
+                            nodes = mutableListOf(constNode, convNode),
+                            initializers = mutableListOf(convW, zpInit),
+                            inputs = mutableListOf(makeValueInfo("x_q"), makeValueInfo("x_zp")),
+                            outputs = mutableListOf(makeValueInfo("y_i32"))
+                        )
+                    )
+                )
+            }
+
+            val cleanGraphBytes = buildCleanGraphModel()
+            val modelFile = File(dir, "model.onnx")
+            modelFile.writeBytes(cleanGraphBytes)
+
+            assertEquals(null, OnnxProtoCodec.inspectModelFileHeader(modelFile))
+            assertFalse(OnnxQuantGraphRepairer.detectLegacyV1CorruptedGraph(modelFile))
+
+            val mode1 = OnnxQuantGraphRepairer.ensureCompatibleBeforeSession(modelFile)
+            assertEquals(ConvRepairMode.TIER1_UINT8_CONV_INTEGER, mode1)
+            assertFalse(OnnxQuantGraphRepairer.detectLegacyV1CorruptedGraph(modelFile))
+
+            val shiftedOnceBytes = extFile.readBytes()
+            for (i in origConvBytes.indices) {
+                assertEquals((origConvBytes[i].toInt() xor 0x80).toByte(), shiftedOnceBytes[i])
+            }
+
+            // Verify binary Constant attribute & multiple ConvInteger attributes + domain survived verbatim!
+            val reparsed = OnnxProtoCodec.parseModel(modelFile.readBytes())
+            val reparsedConst = reparsed.graph!!.nodes.first { it.opType == "Constant" }
+            assertEquals(1, reparsedConst.attributesRaw.size)
+            assertArrayEquals(nonUtf8ConstantAttr, reparsedConst.attributesRaw[0])
+
+            val reparsedConv = reparsed.graph!!.nodes.first { it.opType == "ConvInteger" }
+            assertEquals("ai.onnx", reparsedConv.domain)
+            assertEquals(2, reparsedConv.attributesRaw.size)
+            assertArrayEquals(attrGroup, reparsedConv.attributesRaw[0])
+            assertArrayEquals(attrKernel, reparsedConv.attributesRaw[1])
+
+            // Simulate legacy v1 marker on disk + refreshing ONLY Slot 1A (clean model.onnx) while keeping shifted Slot 1B!
+            File(dir, ".conv_repair.meta").writeText("TIER1_UINT8_CONV_INTEGER|${modelFile.length()}|${modelFile.lastModified()}")
+            assertTrue(OnnxQuantGraphRepairer.detectLegacyV1CorruptedGraph(modelFile))
+
+            OnnxQuantGraphRepairer.clearGraphRepairMarkerOnly(dir)
+            modelFile.writeBytes(cleanGraphBytes)
+            val mode2 = OnnxQuantGraphRepairer.ensureCompatibleBeforeSession(modelFile)
+            assertEquals(ConvRepairMode.TIER1_UINT8_CONV_INTEGER, mode2)
+            assertFalse(OnnxQuantGraphRepairer.detectLegacyV1CorruptedGraph(modelFile))
+            // Slot 1B companion bytes MUST NOT be XOR-flipped a second time!
+            assertArrayEquals(shiftedOnceBytes, extFile.readBytes())
+
+            // Verify header detector rejects LFS, HTML, and ZIP files
+            val lfsFile = File(dir, "lfs.onnx").apply {
+                writeText("version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef\nsize 3049494\n")
+            }
+            val htmlFile = File(dir, "page.onnx").apply {
+                writeText("<!DOCTYPE html><html><body>Hugging Face Login</body></html>")
+            }
+            val zipFile = File(dir, "archive.onnx").apply {
+                writeBytes(byteArrayOf('P'.code.toByte(), 'K'.code.toByte(), 3, 4) + ByteArray(64))
+            }
+            assertTrue(OnnxProtoCodec.inspectModelFileHeader(lfsFile)!!.contains("Git LFS"))
+            assertTrue(OnnxProtoCodec.inspectModelFileHeader(htmlFile)!!.contains("HTML"))
+            assertTrue(OnnxProtoCodec.inspectModelFileHeader(zipFile)!!.contains("ZIP"))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }

@@ -33,8 +33,10 @@ enum class ConvRepairMode {
  */
 object OnnxQuantGraphRepairer {
 
+    private const val MARKER_SCHEMA_VERSION = "v2"
     private const val MARKER_FILE_NAME = ".conv_repair.meta"
     private const val JOURNAL_FILE_NAME = ".conv_u8_journal.meta"
+    private const val COMPANION_U8_STATE_FILE = ".companion_u8.meta"
 
     // Exact protobuf tag+len+string for NodeProto.op_type (field 4, wire 2, len 11) = "ConvInteger"
     private val CONV_INTEGER_OP_BYTES = byteArrayOf(
@@ -46,10 +48,127 @@ object OnnxQuantGraphRepairer {
 
     private val repairLock = Any()
 
+    /**
+     * Clears all repair & companion state markers (used when companion weight file in Slot 1B/2B
+     * is replaced or deleted).
+     */
     fun clearRepairMarkers(slotDir: File?) {
         if (slotDir == null || !slotDir.exists()) return
         runCatching { File(slotDir, MARKER_FILE_NAME).delete() }
         runCatching { File(slotDir, JOURNAL_FILE_NAME).delete() }
+        runCatching { File(slotDir, COMPANION_U8_STATE_FILE).delete() }
+    }
+
+    /**
+     * Clears ONLY the graph repair marker when `model.onnx` (Slot 1A) is refreshed/restored
+     * while keeping the existing `model_int8.onnx.data` (Slot 1B) on disk, so already-shifted
+     * UINT8 companion weights are never XOR-flipped a second time.
+     */
+    fun clearGraphRepairMarkerOnly(slotDir: File?) {
+        if (slotDir == null || !slotDir.exists()) return
+        recordExistingCompanionUint8StateIfAny(slotDir)
+        runCatching { File(slotDir, MARKER_FILE_NAME).delete() }
+        runCatching { File(slotDir, JOURNAL_FILE_NAME).delete() }
+    }
+
+    /**
+     * Inspects an existing slot folder before `model.onnx` is replaced/restored: if `model.onnx`
+     * (or `.conv_repair.meta`) shows that external `ConvInteger` weights in `model_int8.onnx.data`
+     * were already shifted to `DT_UINT8`, persists `.companion_u8.meta` so the 860 MB companion
+     * file does not need to be re-copied or XOR-flipped again.
+     */
+    fun recordExistingCompanionUint8StateIfAny(slotDir: File?) = synchronized(repairLock) {
+        if (slotDir == null || !slotDir.exists()) return
+        val existingGraph = File(slotDir, "model.onnx")
+        if (!existingGraph.exists() || existingGraph.length() < 32L) return
+        val markerText = runCatching { File(slotDir, MARKER_FILE_NAME).takeIf { it.exists() }?.readText()?.trim() }
+            .getOrNull().orEmpty()
+        val hadTier1Marker = markerText.startsWith("TIER1_UINT8_CONV_INTEGER|") ||
+            markerText.startsWith("$MARKER_SCHEMA_VERSION|TIER1_UINT8_CONV_INTEGER|")
+
+        val parsed = runCatching { OnnxProtoCodec.parseModel(existingGraph.readBytes()) }.getOrNull()
+        val graph = parsed?.graph ?: return
+        val initMap = graph.initializers.associateBy { it.name }
+        val convNodes = graph.nodes.filter { it.opType == "ConvInteger" }
+        if (convNodes.isEmpty()) return
+
+        val shiftedLocations = LinkedHashSet<String>()
+        for (n in convNodes) {
+            val wName = n.inputs.getOrNull(1).orEmpty()
+            val w = initMap[wName] ?: continue
+            if (w.isExternal() && (w.dataType == DT_UINT8 || hadTier1Marker)) {
+                val loc = w.externalMap()["location"]?.takeIf { it.isNotBlank() } ?: continue
+                val extFile = File(slotDir, loc)
+                if (extFile.exists() && extFile.length() > 0L) {
+                    shiftedLocations.add("$loc|${extFile.length()}")
+                }
+            }
+        }
+        if (shiftedLocations.isNotEmpty()) {
+            writeShiftedCompanions(slotDir, shiftedLocations)
+        }
+    }
+
+    /**
+     * Detects whether `modelFile` on disk was previously serialized by the legacy v1 codec
+     * (which corrupted binary `NodeProto` `AttributeProto` fields via UTF-8 decoding).
+     */
+    fun detectLegacyV1CorruptedGraph(modelFile: File): Boolean = synchronized(repairLock) {
+        if (!modelFile.exists() || !modelFile.isFile || modelFile.length() < 32L) return false
+        val dir = modelFile.parentFile
+        if (dir != null) {
+            val marker = File(dir, MARKER_FILE_NAME)
+            if (marker.exists()) {
+                val raw = runCatching { marker.readText().trim() }.getOrNull().orEmpty()
+                if (raw.startsWith("TIER1_UINT8_CONV_INTEGER|") || raw.startsWith("TIER2_QDQ_CONV|")) {
+                    recordExistingCompanionUint8StateIfAny(dir)
+                    return true
+                }
+            }
+        }
+        val maxCheckBytes = 32L * 1024L * 1024L
+        if (modelFile.length() > maxCheckBytes) return false
+        val parsed = runCatching { OnnxProtoCodec.parseModel(modelFile.readBytes()) }.getOrNull()
+            ?: return false
+        val nodes = parsed.graph?.nodes ?: return false
+        for (n in nodes) {
+            for (attrBytes in n.attributesRaw) {
+                if (!isValidAttributeProtoWire(attrBytes)) {
+                    recordExistingCompanionUint8StateIfAny(dir)
+                    return true
+                }
+            }
+        }
+        false
+    }
+
+    private fun isValidAttributeProtoWire(attrBytes: ByteArray): Boolean {
+        return runCatching {
+            val r = OnnxProtoCodec.ProtoReader(attrBytes)
+            while (r.hasRemaining()) {
+                val tag = r.readTag()
+                if (tag == 0) break
+                val fn = tag ushr 3
+                val wt = tag and 0x07
+                if (fn !in 1..32) return false
+                // AttributeProto field 5 (t = TensorProto) must itself be valid protobuf if present
+                if (fn == 5 && wt == OnnxProtoCodec.WIRE_LENGTH_DELIMITED) {
+                    val sub = r.readBytes()
+                    val sr = OnnxProtoCodec.ProtoReader(sub)
+                    while (sr.hasRemaining()) {
+                        val stag = sr.readTag()
+                        if (stag == 0) break
+                        val sfn = stag ushr 3
+                        val swt = stag and 0x07
+                        if (sfn !in 1..20) return false
+                        sr.readUnknownField(sfn, swt)
+                    }
+                } else {
+                    r.readUnknownField(fn, wt)
+                }
+            }
+            true
+        }.getOrDefault(false)
     }
 
     fun getRecordedRepairMode(modelFile: File): ConvRepairMode? = synchronized(repairLock) {
@@ -67,7 +186,11 @@ object OnnxQuantGraphRepairer {
         val dir = modelFile.parentFile
         val hasJournal = dir != null && File(dir, JOURNAL_FILE_NAME).exists()
         if (!hasJournal) {
-            readCachedMode(modelFile)?.let { return it }
+            readCachedMode(modelFile)?.let { cached ->
+                if (cached != ConvRepairMode.TIER1_UINT8_CONV_INTEGER || !needsCompanionShiftSync(modelFile)) {
+                    return cached
+                }
+            }
         }
 
         if (!containsConvIntegerOp(modelFile)) {
@@ -92,6 +215,7 @@ object OnnxQuantGraphRepairer {
 
         val initMap = graph.initializers.associateBy { it.name }
         if (!hasJournal && isAlreadyUint8Compatible(convNodes, initMap)) {
+            syncUnshiftedExternalCompanionsIfNeeded(dir, convNodes, initMap, onStatus)
             writeCachedMode(modelFile, ConvRepairMode.TIER1_UINT8_CONV_INTEGER)
             return ConvRepairMode.TIER1_UINT8_CONV_INTEGER
         }
@@ -245,6 +369,8 @@ object OnnxQuantGraphRepairer {
         val completedExtRanges = journalFile?.takeIf { it.exists() }
             ?.readLines()?.map { it.trim() }?.filter { it.isNotEmpty() }?.toMutableSet()
             ?: mutableSetOf()
+        val alreadyShiftedCompanions = modelDir?.let { readShiftedCompanions(it) }.orEmpty()
+        val newlyShiftedCompanions = LinkedHashSet<String>(alreadyShiftedCompanions)
 
         val flippedTensorNames = HashSet<String>()
         val createdU8ZpInitializers = LinkedHashMap<Int, String>()
@@ -279,12 +405,16 @@ object OnnxQuantGraphRepairer {
                     val extFile = File(modelDir, loc)
                     val offset = ext["offset"]?.toLongOrNull() ?: 0L
                     val length = ext["length"]?.toLongOrNull() ?: w.elementCount()
+                    val companionKey = "$loc|${extFile.length()}"
                     val rangeKey = "$loc:$offset:$length"
-                    if (rangeKey !in completedExtRanges) {
+                    val companionAlreadyShifted = companionKey in alreadyShiftedCompanions ||
+                        isExternalConvRangeAlreadyUint8Shifted(extFile, offset, length)
+                    if (!companionAlreadyShifted && rangeKey !in completedExtRanges) {
                         xorFlipExternalRange(extFile, offset, length)
                         completedExtRanges.add(rangeKey)
                         journalFile?.appendText("$rangeKey\n")
                     }
+                    newlyShiftedCompanions.add(companionKey)
                 } else {
                     val bytes = OnnxProtoCodec.readTensor8BitBytes(w, modelDir) ?: return false
                     for (i in bytes.indices) {
@@ -325,8 +455,120 @@ object OnnxQuantGraphRepairer {
         }
 
         atomicWriteModel(modelFile, OnnxProtoCodec.serializeModel(model))
+        if (modelDir != null && newlyShiftedCompanions.isNotEmpty()) {
+            writeShiftedCompanions(modelDir, newlyShiftedCompanions)
+        }
         journalFile?.delete()
         return true
+    }
+
+    /**
+     * Safeguard for large external ConvInteger weight tensors (>= 4 KB, such as UNet 3x3 convs
+     * starting at 11,520 bytes up to 9,437,184 bytes): neural conv weights are tightly centered near 0,
+     * so signed INT8 bytes have mean(|b_signed|) ~ 10..28 whereas XOR-0x80 shifted UINT8 bytes have
+     * mean(|b_signed|) = 128 - mean(|b_u8 - 128|) ~ 100..118. Never triggers on tiny test tensors (< 4 KB).
+     */
+    private fun isExternalConvRangeAlreadyUint8Shifted(
+        extFile: File,
+        offset: Long,
+        length: Long
+    ): Boolean {
+        if (length < 4096L || !extFile.exists() || offset < 0L || offset + length > extFile.length()) {
+            return false
+        }
+        val sampleLen = minOf(length, 8192L).toInt()
+        val buf = ByteArray(sampleLen)
+        val ok = runCatching {
+            RandomAccessFile(extFile, "r").use { raf ->
+                raf.seek(offset)
+                raf.readFully(buf)
+            }
+            true
+        }.getOrDefault(false)
+        if (!ok) return false
+
+        var sumAbsSigned = 0L
+        var sumAbsUnsignedCentered = 0L
+        for (b in buf) {
+            val s = b.toInt() // [-128..127]
+            val u = (b.toInt() and 0xFF) - 128 // [-128..127]
+            sumAbsSigned += kotlin.math.abs(s)
+            sumAbsUnsignedCentered += kotlin.math.abs(u)
+        }
+        val meanSigned = sumAbsSigned.toDouble() / sampleLen.toDouble()
+        val meanUnsignedCentered = sumAbsUnsignedCentered.toDouble() / sampleLen.toDouble()
+        return meanUnsignedCentered < 42.0 && meanSigned > 86.0
+    }
+
+    private fun needsCompanionShiftSync(modelFile: File): Boolean {
+        val dir = modelFile.parentFile ?: return false
+        val recorded = readShiftedCompanions(dir)
+        val companions = dir.listFiles()?.filter { f ->
+            f.isFile &&
+                !f.name.equals(modelFile.name, ignoreCase = true) &&
+                !f.name.endsWith(".meta", ignoreCase = true) &&
+                !f.name.endsWith(".repair_tmp", ignoreCase = true) &&
+                f.length() >= 1_048_576L
+        }.orEmpty()
+        if (companions.isEmpty()) return false
+        return companions.any { "${it.name}|${it.length()}" !in recorded }
+    }
+
+    private fun syncUnshiftedExternalCompanionsIfNeeded(
+        modelDir: File?,
+        convNodes: List<OnnxNodeProto>,
+        initMap: Map<String, OnnxTensorProto>,
+        onStatus: ((String) -> Unit)?
+    ) {
+        if (modelDir == null || !modelDir.exists()) return
+        val recorded = readShiftedCompanions(modelDir).toMutableSet()
+        val flippedNames = HashSet<String>()
+        var didFlipAny = false
+        for (n in convNodes) {
+            val wName = n.inputs.getOrNull(1).orEmpty()
+            if (!flippedNames.add(wName)) continue
+            val w = initMap[wName] ?: continue
+            if (w.dataType != DT_UINT8 || !w.isExternal()) continue
+            val ext = w.externalMap()
+            val loc = ext["location"]?.takeIf { it.isNotBlank() } ?: continue
+            val extFile = File(modelDir, loc)
+            if (!extFile.exists()) continue
+            val companionKey = "$loc|${extFile.length()}"
+            if (companionKey in recorded) continue
+            val offset = ext["offset"]?.toLongOrNull() ?: 0L
+            val length = ext["length"]?.toLongOrNull() ?: w.elementCount()
+            if (length <= 0L || offset < 0L || offset + length > extFile.length()) continue
+            if (!isExternalConvRangeAlreadyUint8Shifted(extFile, offset, length)) {
+                if (!didFlipAny) {
+                    onStatus?.invoke("Syncing INT8 companion weights for Android CPU (One-time)...")
+                    didFlipAny = true
+                }
+                xorFlipExternalRange(extFile, offset, length)
+            }
+        }
+        for (n in convNodes) {
+            val w = initMap[n.inputs.getOrNull(1).orEmpty()] ?: continue
+            if (w.dataType == DT_UINT8 && w.isExternal()) {
+                val loc = w.externalMap()["location"]?.takeIf { it.isNotBlank() } ?: continue
+                val extFile = File(modelDir, loc)
+                if (extFile.exists()) recorded.add("$loc|${extFile.length()}")
+            }
+        }
+        if (recorded.isNotEmpty()) writeShiftedCompanions(modelDir, recorded)
+    }
+
+    private fun readShiftedCompanions(dir: File): Set<String> {
+        val f = File(dir, COMPANION_U8_STATE_FILE)
+        if (!f.exists()) return emptySet()
+        return runCatching {
+            f.readLines().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    private fun writeShiftedCompanions(dir: File, entries: Set<String>) {
+        runCatching {
+            File(dir, COMPANION_U8_STATE_FILE).writeText(entries.joinToString("\n") + "\n")
+        }
     }
 
     private fun xorFlipExternalRange(file: File, offset: Long, length: Long) {
@@ -633,20 +875,21 @@ object OnnxQuantGraphRepairer {
         val marker = File(dir, MARKER_FILE_NAME)
         if (!marker.exists()) return null
         val parts = runCatching { marker.readText().trim().split("|") }.getOrNull() ?: return null
-        if (parts.size < 3) return null
-        val expectedLen = parts[1].toLongOrNull() ?: return null
-        val expectedMtime = parts[2].toLongOrNull() ?: return null
+        // Require v2 schema: "v2|<MODE>|<LEN>|<MTIME>"
+        if (parts.size < 4 || parts[0] != MARKER_SCHEMA_VERSION) return null
+        val expectedLen = parts[2].toLongOrNull() ?: return null
+        val expectedMtime = parts[3].toLongOrNull() ?: return null
         if (modelFile.length() != expectedLen || modelFile.lastModified() != expectedMtime) {
             return null
         }
-        return runCatching { ConvRepairMode.valueOf(parts[0]) }.getOrNull()
+        return runCatching { ConvRepairMode.valueOf(parts[1]) }.getOrNull()
     }
 
     private fun writeCachedMode(modelFile: File, mode: ConvRepairMode) {
         val dir = modelFile.parentFile ?: return
         runCatching {
             File(dir, MARKER_FILE_NAME).writeText(
-                "${mode.name}|${modelFile.length()}|${modelFile.lastModified()}"
+                "$MARKER_SCHEMA_VERSION|${mode.name}|${modelFile.length()}|${modelFile.lastModified()}"
             )
         }
     }

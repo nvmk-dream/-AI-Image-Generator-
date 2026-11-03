@@ -982,6 +982,10 @@ class OnnxModelManager(private val context: Context) {
                     tempGraph.delete()
                     error("Selected file is too small to be a valid ONNX graph file.")
                 }
+                OnnxProtoCodec.inspectModelFileHeader(tempGraph)?.let { badHeaderReason ->
+                    tempGraph.delete()
+                    error("Invalid ONNX graph file ($label): $badHeaderReason")
+                }
                 val protoLocations = extractExternalDataLocations(tempGraph)
                 if (tempGraph.length() in 30_000_000L..400_000_000L && protoLocations.isEmpty()) {
                     val badLen = tempGraph.length()
@@ -991,10 +995,10 @@ class OnnxModelManager(private val context: Context) {
                     )
                 }
 
-                // Replace ONLY model.onnx + repair markers — NEVER delete companion weights in 1B/2B!
+                // Replace ONLY model.onnx + graph marker — preserve companion weights & .companion_u8.meta in 1B/2B!
+                OnnxQuantGraphRepairer.clearGraphRepairMarkerOnly(targetDir)
                 val destGraph = File(targetDir, "model.onnx")
                 if (destGraph.exists()) destGraph.delete()
-                OnnxQuantGraphRepairer.clearRepairMarkers(targetDir)
                 if (!tempGraph.renameTo(destGraph)) {
                     tempGraph.copyTo(destGraph, overwrite = true)
                     tempGraph.delete()
@@ -1213,6 +1217,75 @@ class OnnxModelManager(private val context: Context) {
         val (_, bytes) = importDedicatedSlotFromUri(uri, targetSlot, originalNameHint, onProgress).getOrThrow()
         val link = linkEnginePairFiles(dedicatedFolder(targetSlot))
         link.weightsDisplayName.ifBlank { "weights" } to bytes
+    }
+
+    /**
+     * Self-heals ONLY `unet_fast_lcm/model.onnx` (~3.05 MB Slot 1A graph) from any persisted SAF
+     * folder tree (`Phone > IG`) if an older v1 build corrupted its `NodeProto` attributes on disk,
+     * WITHOUT re-copying `model_int8.onnx.data` (~860 MB Slot 1B) or touching any other slot.
+     */
+    fun restoreCorruptedFastLcmGraphIfPossible(onProgress: ((String) -> Unit)? = null): Boolean {
+        val perms = runCatching {
+            context.contentResolver.persistedUriPermissions.filter { it.isReadPermission }
+        }.getOrDefault(emptyList())
+        if (perms.isEmpty()) return false
+
+        val fastDir = engineFolder(ActiveDiffusionEngine.FAST_LCM)
+        OnnxQuantGraphRepairer.recordExistingCompanionUint8StateIfAny(fastDir)
+
+        for (perm in perms) {
+            val restored = runCatching {
+                val rootDoc = DocumentFile.fromTreeUri(context, perm.uri) ?: return@runCatching false
+                data class SmallGraphDoc(val parentName: String, val doc: DocumentFile, val sizeBytes: Long)
+                val candidates = mutableListOf<SmallGraphDoc>()
+                fun walk(dir: DocumentFile, parentLabel: String) {
+                    for (child in dir.listFiles()) {
+                        if (child.isDirectory) {
+                            walk(child, child.name.orEmpty().lowercase(Locale.US))
+                        } else if (child.isFile) {
+                            val name = child.name.orEmpty()
+                            val len = child.length()
+                            if (name.endsWith(".onnx", ignoreCase = true) &&
+                                !isCompanionWeightFileName(name) &&
+                                len in 1025L..MAX_GRAPH_SHELL_STREAM_SCAN_BYTES
+                            ) {
+                                candidates.add(SmallGraphDoc(parentLabel, child, len))
+                            }
+                        }
+                    }
+                }
+                walk(rootDoc, rootDoc.name.orEmpty().lowercase(Locale.US))
+                if (candidates.isEmpty()) return@runCatching false
+
+                var bestDoc: DocumentFile? = null
+                for (cand in candidates) {
+                    val scan = runCatching {
+                        context.contentResolver.openInputStream(cand.doc.uri)?.use { ins ->
+                            scanGraphShellStream(ins, MAX_GRAPH_SHELL_STREAM_SCAN_BYTES)
+                        }
+                    }.getOrNull() ?: continue
+                    val extLocs = scan.first
+                    val hasInt8OrLcm = scan.second
+                    if (extLocs.any { it.contains("int8", ignoreCase = true) || it.equals("model_int8.onnx.data", ignoreCase = true) } ||
+                        (hasInt8OrLcm && extLocs.isNotEmpty())
+                    ) {
+                        bestDoc = cand.doc
+                        break
+                    }
+                }
+                val chosen = bestDoc ?: return@runCatching false
+                onProgress?.invoke("Restoring clean Slot 1A Fast LCM model.onnx (~3.05 MB)...")
+                importDedicatedSlotFromUri(
+                    uri = chosen.uri,
+                    slot = DedicatedModelSlot.FAST_LCM_GRAPH,
+                    originalNameHint = chosen.name,
+                    onProgress = onProgress
+                ).getOrThrow()
+                true
+            }.getOrDefault(false)
+            if (restored) return true
+        }
+        return false
     }
 
     /**

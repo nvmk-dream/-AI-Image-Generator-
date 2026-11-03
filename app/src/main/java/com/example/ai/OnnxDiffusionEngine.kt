@@ -945,11 +945,29 @@ class OnnxDiffusionEngine(
         inferenceMode: String,
         onRepairStatus: ((String) -> Unit)? = null
     ): OrtSession {
+        OnnxProtoCodec.inspectModelFileHeader(modelFile)?.let { badHeader ->
+            error("${modelFile.parentFile?.name ?: modelFile.name}: $badHeader")
+        }
+        val isFastLcmSlot = modelFile.parentFile?.name == DedicatedModelSlot.FAST_LCM_GRAPH.folderName
+        if (isFastLcmSlot && OnnxQuantGraphRepairer.detectLegacyV1CorruptedGraph(modelFile)) {
+            if (!modelManager.restoreCorruptedFastLcmGraphIfPossible(onRepairStatus)) {
+                error(
+                    "Slot 1A (unet_fast_lcm/model.onnx ~3.05 MB) needs a one-time refresh: tap 'Upload Slot 1A' and re-select model.onnx (keep Slot 1B 860 MB & all other slots untouched)."
+                )
+            }
+        }
+
         val repairMode = OnnxQuantGraphRepairer.ensureCompatibleBeforeSession(modelFile, onRepairStatus)
         return try {
             openConfiguredSession(env, modelFile, inferenceMode, repairMode)
         } catch (firstError: Throwable) {
             val msg = firstError.message.orEmpty()
+            if (isFastLcmSlot && msg.contains("INVALID_PROTOBUF", ignoreCase = true)) {
+                if (modelManager.restoreCorruptedFastLcmGraphIfPossible(onRepairStatus)) {
+                    val healedMode = OnnxQuantGraphRepairer.ensureCompatibleBeforeSession(modelFile, onRepairStatus)
+                    return openConfiguredSession(env, modelFile, inferenceMode, healedMode)
+                }
+            }
             val needsQdqFallback = repairMode != ConvRepairMode.TIER2_QDQ_CONV &&
                 (msg.contains("ConvInteger", ignoreCase = true) ||
                     msg.contains("NOT_IMPLEMENTED", ignoreCase = true))

@@ -360,8 +360,9 @@ internal object OnnxProtoCodec {
                 fn == 2 && wt == WIRE_LENGTH_DELIMITED -> n.outputs.add(r.readString())
                 fn == 3 && wt == WIRE_LENGTH_DELIMITED -> n.name = r.readString()
                 fn == 4 && wt == WIRE_LENGTH_DELIMITED -> n.opType = r.readString()
-                fn == 5 && wt == WIRE_LENGTH_DELIMITED -> n.domain = r.readString()
-                fn == 6 && wt == WIRE_LENGTH_DELIMITED -> n.attributesRaw.add(r.readBytes())
+                // onnx.proto NodeProto: 5 = repeated AttributeProto attribute, 6 = doc_string, 7 = domain
+                fn == 5 && wt == WIRE_LENGTH_DELIMITED -> n.attributesRaw.add(r.readBytes())
+                fn == 7 && wt == WIRE_LENGTH_DELIMITED -> n.domain = r.readString()
                 else -> n.otherFields.add(r.readUnknownField(fn, wt))
             }
         }
@@ -472,9 +473,14 @@ internal object OnnxProtoCodec {
         for (outp in n.outputs) w.writeStringField(2, outp, writeIfEmpty = true)
         w.writeStringField(3, n.name)
         w.writeStringField(4, n.opType)
-        w.writeStringField(5, n.domain)
-        for (attr in n.attributesRaw) w.writeBytesField(6, attr)
-        n.otherFields.forEach { w.writeRawField(it) }
+        for (attr in n.attributesRaw) w.writeBytesField(5, attr)
+        for (f in n.otherFields) {
+            if (f.fieldNumber < 7) w.writeRawField(f)
+        }
+        w.writeStringField(7, n.domain)
+        for (f in n.otherFields) {
+            if (f.fieldNumber >= 7) w.writeRawField(f)
+        }
         return w.toByteArray()
     }
 
@@ -573,5 +579,47 @@ internal object OnnxProtoCodec {
             raf.readFully(out)
         }
         return out
+    }
+
+    /**
+     * Inspects the leading bytes of an `.onnx` file to detect non-ONNX downloads
+     * (Git LFS text pointers, HTML pages, ZIP archives, or JSON files).
+     * Returns `null` if the header looks like a binary ONNX ModelProto, or a human-readable reason otherwise.
+     */
+    fun inspectModelFileHeader(file: File): String? {
+        if (!file.exists() || !file.isFile) return "Model file does not exist."
+        val len = file.length()
+        if (len < 32L) return "File is empty or truncated ($len bytes)."
+        val header = ByteArray(minOf(len, 128L).toInt())
+        val read = runCatching {
+            file.inputStream().use { it.read(header) }
+        }.getOrDefault(-1)
+        if (read < 8) return "Unable to read model file header."
+
+        val asciiPrefix = String(header, 0, read, Charsets.ISO_8859_1).trimStart()
+        return when {
+            asciiPrefix.startsWith("version https://git-lfs.github.com", ignoreCase = true) ->
+                "File is a Git LFS text pointer (~${len} B), not the actual ONNX binary model."
+            asciiPrefix.startsWith("<!DOCTYPE html", ignoreCase = true) ||
+                asciiPrefix.startsWith("<html", ignoreCase = true) ||
+                asciiPrefix.startsWith("<?xml", ignoreCase = true) ->
+                "File is an HTML/XML web page download, not an ONNX binary model."
+            header[0] == 'P'.code.toByte() && header[1] == 'K'.code.toByte() &&
+                (header[2] == 3.toByte() || header[2] == 5.toByte() || header[2] == 7.toByte()) ->
+                "File is a ZIP archive (PK header) — extract model.onnx before uploading."
+            asciiPrefix.startsWith("{") && asciiPrefix.contains("\"") ->
+                "File is a JSON config file, not an ONNX binary model."
+            // Valid ONNX ModelProto normally begins with field 1 (ir_version, tag 0x08) or another ModelProto tag (wireType 0 or 2, field 1..20)
+            else -> {
+                val firstTag = runCatching { ProtoReader(header, 0, read).readRawVarint32() }.getOrDefault(0)
+                val fn = firstTag ushr 3
+                val wt = firstTag and 0x07
+                if (firstTag <= 0 || fn !in 1..32 || (wt != WIRE_VARINT && wt != WIRE_LENGTH_DELIMITED)) {
+                    "File header (0x${String.format("%02X%02X%02X%02X", header[0], header[1], header[2], header[3])}) is not a valid ONNX ModelProto."
+                } else {
+                    null
+                }
+            }
+        }
     }
 }
