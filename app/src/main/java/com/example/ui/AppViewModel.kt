@@ -4,12 +4,14 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ai.AutoDownloadProgressState
 import com.example.ai.DedicatedModelSlot
 import com.example.ai.DiffusionModelSlot
 import com.example.ai.GenerationProgress
 import com.example.ai.ImageEditorAdjustments
 import com.example.ai.OfflineFaceSwapEngine
 import com.example.ai.OfflineImageEditorEngine
+import com.example.ai.OnnxAutoModelDownloader
 import com.example.ai.OnnxDiffusionEngine
 import com.example.ai.OnnxModelManager
 import com.example.ai.PreferredUnetImportMode
@@ -90,7 +92,9 @@ data class ImageGeneratorUiState(
     val isSavingEdit: Boolean = false,
     val statusToastMessage: String? = null,
     val userPromptInput: String = "",
-    val selectedInputPhotoUri: Uri? = null
+    val selectedInputPhotoUri: Uri? = null,
+    val showFirstLaunchDownloadDialog: Boolean = false,
+    val autoDownloadProgress: AutoDownloadProgressState = AutoDownloadProgressState()
 )
 
 private data class TransientUiState(
@@ -126,19 +130,24 @@ private data class TransientUiState(
     val statusToastMessage: String? = null,
     val userPromptInput: String? = null,
     val selectedInputPhotoUri: Uri? = null,
-    val returnScreenForSafety: ActiveScreen = ActiveScreen.SETTINGS
+    val returnScreenForSafety: ActiveScreen = ActiveScreen.SETTINGS,
+    val manualShowAutoDownloadDialog: Boolean = false,
+    val dismissedFirstLaunchDialogInSession: Boolean = false,
+    val autoDownloadProgress: AutoDownloadProgressState = AutoDownloadProgressState()
 )
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefsRepo = AppPreferencesRepository(application)
     private val modelManager = OnnxModelManager(application)
+    private val autoDownloader = OnnxAutoModelDownloader(modelManager)
     private val creationsRepo = CreationsRepository(application)
     private val characterRepo = CharacterStudioRepository(application)
     private val diffusionEngine = OnnxDiffusionEngine(application, modelManager)
     private val faceSwapEngine = OfflineFaceSwapEngine(application, modelManager)
 
     private var activeGenerationJob: Job? = null
+    private var activeAutoDownloadJob: Job? = null
 
     private val initialChars = characterRepo.loadCharacters()
 
@@ -156,6 +165,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         transientState
     ) { prefs, transient ->
         val effectiveUserPrompt = transient.userPromptInput ?: prefs.savedUserImagePrompt
+        val shouldAutoPromptFirstOpen = prefs.isLoadedFromDisk &&
+            !prefs.firstLaunchDownloadPromptHandled &&
+            !transient.dismissedFirstLaunchDialogInSession &&
+            !transient.autoDownloadProgress.isDownloading &&
+            transient.metrics.coreInstalledCount == 0 &&
+            !transient.metrics.hasAnySlotFilesOnDisk
+
         ImageGeneratorUiState(
             activeScreen = transient.activeScreen,
             selectedTab = transient.selectedTab,
@@ -190,7 +206,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             isSavingEdit = transient.isSavingEdit,
             statusToastMessage = transient.statusToastMessage,
             userPromptInput = effectiveUserPrompt,
-            selectedInputPhotoUri = transient.selectedInputPhotoUri
+            selectedInputPhotoUri = transient.selectedInputPhotoUri,
+            showFirstLaunchDownloadDialog = transient.manualShowAutoDownloadDialog || shouldAutoPromptFirstOpen,
+            autoDownloadProgress = transient.autoDownloadProgress
         )
     }.stateIn(
         scope = viewModelScope,
@@ -1259,6 +1277,151 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 )
             }
+        }
+    }
+
+    fun openAutoDownloadDialog() {
+        transientState.update { it.copy(manualShowAutoDownloadDialog = true) }
+    }
+
+    fun dismissFirstLaunchDownloadDialog() {
+        transientState.update {
+            it.copy(
+                manualShowAutoDownloadDialog = false,
+                dismissedFirstLaunchDialogInSession = true
+            )
+        }
+        viewModelScope.launch {
+            prefsRepo.setFirstLaunchDownloadPromptHandled(true)
+        }
+    }
+
+    fun clearAutoDownloadBanner() {
+        if (!transientState.value.autoDownloadProgress.isDownloading) {
+            transientState.update { it.copy(autoDownloadProgress = AutoDownloadProgressState()) }
+        }
+    }
+
+    fun cancelAutoDownload() {
+        autoDownloader.requestCancel()
+        activeAutoDownloadJob?.cancel()
+    }
+
+    fun confirmAndStartAutoDownload(
+        selectedSlots: Set<DedicatedModelSlot> = OnnxAutoModelDownloader.DEFAULT_SELECTED_CORE_SLOTS
+    ) {
+        if (transientState.value.autoDownloadProgress.isDownloading) return
+        val coreOnly = selectedSlots.filter { it.isCoreSlot }.toSet()
+        if (coreOnly.isEmpty()) {
+            dismissFirstLaunchDownloadDialog()
+            return
+        }
+
+        transientState.update {
+            it.copy(
+                manualShowAutoDownloadDialog = false,
+                dismissedFirstLaunchDialogInSession = true,
+                onnxVerificationReport = null,
+                autoDownloadProgress = AutoDownloadProgressState(
+                    isDownloading = true,
+                    totalSelectedSlotsCount = coreOnly.size,
+                    statusTextEn = "Preparing phone folder & starting download...",
+                    statusTextTa = "மொபைல் ஃபோல்டர் தயார் செய்யப்பட்டு பதிவிறக்கம் தொடங்குகிறது..."
+                )
+            )
+        }
+
+        activeAutoDownloadJob = viewModelScope.launch {
+            prefsRepo.setFirstLaunchDownloadPromptHandled(true)
+
+            val result = withContext(Dispatchers.IO) {
+                autoDownloader.downloadSelectedCoreSlots(
+                    selectedSlots = coreOnly,
+                    onProgress = { progressState ->
+                        transientState.update { s -> s.copy(autoDownloadProgress = progressState) }
+                    },
+                    onSlotCompleted = { completedSlot ->
+                        val refreshed = modelManager.inspectCurrentMetrics()
+                        if ((completedSlot == DedicatedModelSlot.FAST_LCM_GRAPH ||
+                                completedSlot == DedicatedModelSlot.FAST_LCM_WEIGHTS) &&
+                            refreshed.isFastLcmEngineReady
+                        ) {
+                            prefsRepo.setActiveEngine(ActiveDiffusionEngine.FAST_LCM)
+                        } else if ((completedSlot == DedicatedModelSlot.STANDARD_SD_GRAPH ||
+                                completedSlot == DedicatedModelSlot.STANDARD_SD_WEIGHTS) &&
+                            refreshed.isStandardSdEngineReady &&
+                            !refreshed.isFastLcmEngineReady
+                        ) {
+                            prefsRepo.setActiveEngine(ActiveDiffusionEngine.STANDARD_SD)
+                        }
+                        transientState.update { s -> s.copy(metrics = refreshed) }
+                    }
+                )
+            }
+
+            val finalMetrics = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
+            val isTamil = uiState.value.preferences.isTamil
+
+            result.fold(
+                onSuccess = { batch ->
+                    val readyTotal = batch.downloadedSlots.size + batch.skippedAlreadyReadySlots.size
+                    val lowSpaceNoteEn = if (batch.pausedLowStorageSlot != null) {
+                        " (Slot 2B ~3.44 GB paused due to low phone storage — Fast LCM is 100% Ready!)"
+                    } else ""
+                    val lowSpaceNoteTa = if (batch.pausedLowStorageSlot != null) {
+                        " (போனில் இடமில்லாததால் Slot 2B ~3.44 GB நிறுத்தப்பட்டது — Fast LCM 100% தயார்!)"
+                    } else ""
+
+                    val summaryEn = "✅ $readyTotal Core Slot(s) saved in ${batch.folderDisplayPath} & auto-linked!$lowSpaceNoteEn"
+                    val summaryTa = "✅ $readyTotal Core ஸ்லாட்டுகள் ${batch.folderDisplayPath} ஃபோல்டரில் சேமிக்கப்பட்டு ஆப்பில் தானாக இணைக்கப்பட்டன!$lowSpaceNoteTa"
+
+                    transientState.update {
+                        it.copy(
+                            metrics = finalMetrics,
+                            autoDownloadProgress = AutoDownloadProgressState(
+                                isDownloading = false,
+                                completedSlotsCount = readyTotal,
+                                totalSelectedSlotsCount = coreOnly.size,
+                                finishedSummaryEn = summaryEn,
+                                finishedSummaryTa = summaryTa
+                            ),
+                            statusToastMessage = if (isTamil) summaryTa else summaryEn
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    if (err is CancellationException) {
+                        val cancelEn = "Download paused — partial progress is saved in IG_Models. Tap Resume anytime."
+                        val cancelTa = "பதிவிறக்கம் இடைநிறுத்தப்பட்டது — இதுவரை இறங்கிய பகுதி பத்திரமாக உள்ளது. எப்போது வேண்டுமானாலும் தொடரலாம்."
+                        transientState.update {
+                            it.copy(
+                                metrics = finalMetrics,
+                                autoDownloadProgress = AutoDownloadProgressState(
+                                    isDownloading = false,
+                                    errorTextEn = cancelEn,
+                                    errorTextTa = cancelTa
+                                ),
+                                statusToastMessage = if (isTamil) cancelTa else cancelEn
+                            )
+                        }
+                    } else {
+                        val errMsg = err.message ?: "Network error"
+                        val failEn = "Download interrupted: $errMsg (Tap Auto-Download to resume from saved progress)"
+                        val failTa = "பதிவிறக்கம் தடைபட்டது: $errMsg (மீண்டும் அழுத்தினால் விட்ட இடத்திலிருந்தே தொடரும்)"
+                        transientState.update {
+                            it.copy(
+                                metrics = finalMetrics,
+                                autoDownloadProgress = AutoDownloadProgressState(
+                                    isDownloading = false,
+                                    errorTextEn = failEn,
+                                    errorTextTa = failTa
+                                ),
+                                statusToastMessage = if (isTamil) failTa else failEn
+                            )
+                        }
+                    }
+                }
+            )
         }
     }
 }

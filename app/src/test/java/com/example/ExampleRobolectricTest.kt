@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import com.example.ai.DiffusionModelSlot
@@ -103,6 +104,10 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("settings_download_open_lcm_unet_data")
             .performScrollTo()
             .assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_toggle_extra_links")
+            .performScrollTo()
+            .performClick()
+        composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("settings_download_open_sd_compvis_weights_pb")
             .performScrollTo()
             .assertIsDisplayed()

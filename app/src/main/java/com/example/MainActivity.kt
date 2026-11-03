@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -22,9 +24,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -34,7 +38,9 @@ import com.example.ai.PreferredUnetImportMode
 import com.example.ui.ActiveScreen
 import com.example.ui.AppViewModel
 import com.example.ui.BottomNavTab
+import com.example.ui.components.AutoDownloadLiveBanner
 import com.example.ui.components.DreamyHeartBackground
+import com.example.ui.components.FirstLaunchModelDownloadDialog
 import com.example.ui.components.GlassBottomNavBar
 import com.example.ui.screens.CharacterStudioScreen
 import com.example.ui.screens.ContentSafetySettingsScreen
@@ -253,6 +259,10 @@ fun ImageGeneratorRoot(
                                         importProgressText = uiState.importProgressText,
                                         verificationReport = uiState.onnxVerificationReport,
                                         preferredUnetMode = uiState.preferredUnetMode,
+                                        autoDownloadProgress = uiState.autoDownloadProgress,
+                                        onOpenAutoDownloadDialog = appViewModel::openAutoDownloadDialog,
+                                        onCancelAutoDownload = appViewModel::cancelAutoDownload,
+                                        onClearAutoDownloadBanner = appViewModel::clearAutoDownloadBanner,
                                         onSelectEngine = appViewModel::setActiveEngine,
                                         onSelectPreferredUnetMode = appViewModel::setPreferredUnetImportMode,
                                         onSwitchUnetFromFolder = { mode ->
@@ -481,6 +491,35 @@ fun ImageGeneratorRoot(
                                 onDeleteCreation = appViewModel::deleteCreation
                             )
                         }
+                    }
+
+                    // Show floating live download banner when user navigates outside the Models tab while downloading
+                    val showOverlayBanner = !(uiState.activeScreen == ActiveScreen.MAIN_TABS &&
+                        uiState.selectedTab == BottomNavTab.MODELS)
+                    if (showOverlayBanner) {
+                        AutoDownloadLiveBanner(
+                            progress = uiState.autoDownloadProgress,
+                            isTamil = uiState.preferences.isTamil,
+                            darkTheme = uiState.preferences.darkTheme,
+                            onCancelDownload = appViewModel::cancelAutoDownload,
+                            onResumeOrRetry = appViewModel::openAutoDownloadDialog,
+                            onDismissBanner = appViewModel::clearAutoDownloadBanner,
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .windowInsetsPadding(WindowInsets.statusBars)
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                    }
+
+                    // First-Launch Permission & Auto-Download Dialog (1A, 1B, 2A, 2B, 3, 4, 5, 6)
+                    if (uiState.showFirstLaunchDownloadDialog) {
+                        FirstLaunchModelDownloadDialog(
+                            metrics = uiState.metrics,
+                            isTamil = uiState.preferences.isTamil,
+                            darkTheme = uiState.preferences.darkTheme,
+                            onAllowAndDownload = appViewModel::confirmAndStartAutoDownload,
+                            onDismissLater = appViewModel::dismissFirstLaunchDownloadDialog
+                        )
                     }
                 }
             }

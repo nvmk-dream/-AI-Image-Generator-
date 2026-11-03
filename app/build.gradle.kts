@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.imagegenerator.nvmkai"
     minSdk = 24
     targetSdk = 36
-    versionCode = 111
-    versionName = "2.0.0"
+    versionCode = 112
+    versionName = "2.1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -63,7 +63,18 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all { testTask ->
+        val preCachedM2 = file("/home/appuser/.m2/repository")
+        if (preCachedM2.exists()) {
+          testTask.systemProperty("maven.repo.local", preCachedM2.absolutePath)
+          testTask.systemProperty("robolectric.dependency.repo.url", preCachedM2.toURI().toString())
+        }
+      }
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true

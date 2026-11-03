@@ -318,7 +318,8 @@ data class RealDeviceAndModelMetrics(
     val deviceTotalRamBytes: Long = 0L,
     val deviceAvailableRamBytes: Long = 0L,
     val hasTokenizerFiles: Boolean = false,
-    val activeRamSessionsCount: Int = 0
+    val activeRamSessionsCount: Int = 0,
+    val phoneModelsFolderPath: String = ""
 ) {
     val coreDedicatedSlots: List<DedicatedSlotStatus>
         get() = dedicatedSlots.filter { it.slot.isCoreSlot }
@@ -531,28 +532,121 @@ class OnnxModelManager(private val context: Context) {
 
     private val activeSessions = ConcurrentHashMap<String, OrtSession>()
 
+    val legacyInternalRootDir: File
+        get() = File(context.filesDir, "onnx_models")
+
     val modelsRootDir: File
-        get() = File(context.filesDir, "onnx_models").apply { if (!exists()) mkdirs() }
+        get() = resolvePrimaryModelsRootDir(context)
+
+    val phoneModelsDisplayPath: String
+        get() = formatPhoneModelsDisplayPath(context, modelsRootDir)
+
+    init {
+        ensurePhoneModelFoldersCreated()
+    }
+
+    /**
+     * Immediately creates the phone-visible `Android/media/<package>/IG_Models/` directory and
+     * all 6 core slot folders on first open so users and the in-app downloader have a ready folder.
+     * Also attempts zero-copy `renameTo` migration from legacy `filesDir/onnx_models` if same mount.
+     */
+    fun ensurePhoneModelFoldersCreated(): File {
+        val root = modelsRootDir
+        val coreFolderNames = listOf(
+            DedicatedModelSlot.FAST_LCM_GRAPH.folderName,
+            DedicatedModelSlot.STANDARD_SD_GRAPH.folderName,
+            DedicatedModelSlot.TEXT_ENCODER.folderName,
+            DedicatedModelSlot.VAE_DECODER.folderName,
+            DedicatedModelSlot.VAE_ENCODER.folderName,
+            DedicatedModelSlot.TOKENIZER.folderName
+        )
+        for (dirName in coreFolderNames) {
+            File(root, dirName).apply { if (!exists()) mkdirs() }
+        }
+
+        val legacyRoot = legacyInternalRootDir
+        if (legacyRoot.exists() && legacyRoot.absolutePath != root.absolutePath) {
+            migrateLegacyUnetDir(legacyRoot)
+            legacyRoot.listFiles()?.filter { it.isDirectory }?.forEach { legacySub ->
+                val targetSub = File(root, legacySub.name).apply { if (!exists()) mkdirs() }
+                val targetHasPayload = directoryHasPayloadFiles(targetSub)
+                if (!targetHasPayload) {
+                    val children = legacySub.listFiles().orEmpty()
+                    if (children.isNotEmpty()) {
+                        // Only move if ALL files in the folder can be atomically renamed on the same mount
+                        // so paired graph + weights are never split across two directories.
+                        val movedFiles = mutableListOf<Pair<File, File>>()
+                        var allMoved = true
+                        for (child in children) {
+                            val dest = File(targetSub, child.name)
+                            if (child.renameTo(dest)) {
+                                movedFiles.add(dest to child)
+                            } else {
+                                allMoved = false
+                                break
+                            }
+                        }
+                        if (allMoved) {
+                            legacySub.deleteRecursively()
+                        } else {
+                            // Roll back partial renames so pair stays intact in legacySub
+                            for ((movedDest, origLoc) in movedFiles) {
+                                movedDest.renameTo(origLoc)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return root
+    }
+
+    /**
+     * Resolves the active folder for a given slot folder name:
+     * - Uses `Android/media/<package>/IG_Models/<folderName>` for all fresh installs & new downloads.
+     * - Seamlessly preserves existing models in legacy `filesDir/onnx_models/<folderName>` on App Updates
+     *   when Android FUSE prevents cross-mount renameTo, ensuring zero data loss and zero duplicate space.
+     */
+    private fun activeStorageFolder(folderName: String): File {
+        val primaryDir = File(modelsRootDir, folderName).apply { if (!exists()) mkdirs() }
+        if (directoryHasPayloadFiles(primaryDir)) return primaryDir
+        val legacyRoot = legacyInternalRootDir
+        if (legacyRoot.exists() && legacyRoot.absolutePath != modelsRootDir.absolutePath) {
+            val legacyDir = File(legacyRoot, folderName)
+            if (directoryHasPayloadFiles(legacyDir)) return legacyDir
+        }
+        return primaryDir
+    }
 
     fun dedicatedFolder(slot: DedicatedModelSlot): File =
-        File(modelsRootDir, slot.folderName).apply { if (!exists()) mkdirs() }
+        activeStorageFolder(slot.folderName)
+
+    /**
+     * Always returns the phone-visible primary folder inside `IG_Models/<slot.folderName>`,
+     * unless an unmigrated companion pair already resides in legacy storage for this exact folder.
+     */
+    fun targetDownloadFolder(slot: DedicatedModelSlot): File =
+        activeStorageFolder(slot.folderName)
 
     fun engineFolder(engine: ActiveDiffusionEngine): File {
         val dirName = when (engine) {
             ActiveDiffusionEngine.FAST_LCM -> DedicatedModelSlot.FAST_LCM_GRAPH.folderName
             ActiveDiffusionEngine.STANDARD_SD -> DedicatedModelSlot.STANDARD_SD_GRAPH.folderName
         }
-        return File(modelsRootDir, dirName).apply { if (!exists()) mkdirs() }
+        return activeStorageFolder(dirName)
     }
 
     private fun slotDir(slot: DiffusionModelSlot): File =
-        File(modelsRootDir, slot.folderHint).apply { if (!exists()) mkdirs() }
+        activeStorageFolder(slot.folderHint)
 
     fun slotModelFile(slot: DiffusionModelSlot): File =
         File(slotDir(slot), "model.onnx")
 
     fun resolveEngineUnetFile(engine: ActiveDiffusionEngine): File? {
         migrateLegacyUnetDir(modelsRootDir)
+        if (legacyInternalRootDir.exists() && legacyInternalRootDir.absolutePath != modelsRootDir.absolutePath) {
+            migrateLegacyUnetDir(legacyInternalRootDir)
+        }
         val dir = engineFolder(engine)
         linkEnginePairFiles(dir)
         val onnx = dir.listFiles()
@@ -562,6 +656,9 @@ class OnnxModelManager(private val context: Context) {
 
     fun resolveExistingSlotFile(slot: DiffusionModelSlot): File? {
         migrateLegacyUnetDir(modelsRootDir)
+        if (legacyInternalRootDir.exists() && legacyInternalRootDir.absolutePath != modelsRootDir.absolutePath) {
+            migrateLegacyUnetDir(legacyInternalRootDir)
+        }
         if (slot == DiffusionModelSlot.UNET) {
             val fastFile = resolveEngineUnetFile(ActiveDiffusionEngine.FAST_LCM)
             if (fastFile != null && findMissingCompanionFiles(fastFile).isEmpty()) return fastFile
@@ -577,6 +674,8 @@ class OnnxModelManager(private val context: Context) {
 
         val altFile = File(modelsRootDir, slot.canonicalFileName)
         if (altFile.exists() && altFile.length() > 1024L) return altFile
+        val legacyAlt = File(legacyInternalRootDir, slot.canonicalFileName)
+        if (legacyAlt.exists() && legacyAlt.length() > 1024L) return legacyAlt
         return null
     }
 
@@ -619,7 +718,8 @@ class OnnxModelManager(private val context: Context) {
                     it.isFile &&
                         it.absolutePath != actualFile?.absolutePath &&
                         !it.name.endsWith(".meta") &&
-                        !it.name.endsWith(".repair_tmp")
+                        !it.name.endsWith(".repair_tmp") &&
+                        !it.name.endsWith(".download_part")
                 }
                 ?.sumOf { it.length() } ?: 0L
             val originLabel = File(dir, "source_name.meta").takeIf { it.exists() }
@@ -646,14 +746,24 @@ class OnnxModelManager(private val context: Context) {
             )
         }
 
-        val tokDir = File(modelsRootDir, "tokenizer")
+        val tokDir = dedicatedFolder(DedicatedModelSlot.TOKENIZER)
         val hasTokenizer = (File(tokDir, "vocab.json").exists() && File(tokDir, "merges.txt").exists()) ||
-            File(modelsRootDir, "vocab.json").exists()
+            File(modelsRootDir, "vocab.json").exists() ||
+            File(legacyInternalRootDir, "vocab.json").exists()
 
-        val modelBytes = calculateDirectorySize(modelsRootDir)
+        val primaryBytes = calculateDirectorySize(modelsRootDir)
+        val legacyBytes = if (legacyInternalRootDir.exists() &&
+            legacyInternalRootDir.absolutePath != modelsRootDir.absolutePath
+        ) {
+            calculateDirectorySize(legacyInternalRootDir)
+        } else {
+            0L
+        }
+        val modelBytes = primaryBytes + legacyBytes
         val cacheBytes = calculateDirectorySize(context.cacheDir)
 
-        val statFs = StatFs(context.filesDir.absolutePath)
+        val statFs = runCatching { StatFs(modelsRootDir.absolutePath) }
+            .getOrElse { StatFs(context.filesDir.absolutePath) }
         val freeBytes = statFs.availableBytes
         val totalBytes = statFs.totalBytes
 
@@ -675,7 +785,8 @@ class OnnxModelManager(private val context: Context) {
             deviceTotalRamBytes = memInfo.totalMem,
             deviceAvailableRamBytes = memInfo.availMem,
             hasTokenizerFiles = hasTokenizer,
-            activeRamSessionsCount = activeSessions.size
+            activeRamSessionsCount = activeSessions.size,
+            phoneModelsFolderPath = phoneModelsDisplayPath
         )
     }
 
@@ -1142,40 +1253,56 @@ class OnnxModelManager(private val context: Context) {
 
     fun deleteDedicatedSlot(slot: DedicatedModelSlot) {
         activeSessions.remove(slot.folderName)?.runCatching { close() }
-        val dir = dedicatedFolder(slot)
-        when (slot) {
-            DedicatedModelSlot.FAST_LCM_GRAPH,
-            DedicatedModelSlot.STANDARD_SD_GRAPH -> {
-                File(dir, "model.onnx").delete()
-                File(dir, "graph_source.meta").delete()
-                File(dir, "source_name.meta").delete()
-                OnnxQuantGraphRepairer.clearRepairMarkers(dir)
-                linkEnginePairFiles(dir)
+        val dirsToClean = buildList {
+            add(File(modelsRootDir, slot.folderName))
+            if (legacyInternalRootDir.exists() && legacyInternalRootDir.absolutePath != modelsRootDir.absolutePath) {
+                add(File(legacyInternalRootDir, slot.folderName))
             }
-            DedicatedModelSlot.FAST_LCM_WEIGHTS,
-            DedicatedModelSlot.STANDARD_SD_WEIGHTS -> {
-                dir.listFiles()?.forEach { f ->
-                    if (f.isFile &&
-                        !f.name.equals("model.onnx", ignoreCase = true) &&
-                        !f.name.equals("graph_source.meta", ignoreCase = true)
-                    ) {
-                        f.delete()
+        }
+        for (dir in dirsToClean) {
+            if (!dir.exists()) continue
+            when (slot) {
+                DedicatedModelSlot.FAST_LCM_GRAPH,
+                DedicatedModelSlot.STANDARD_SD_GRAPH -> {
+                    File(dir, "model.onnx").delete()
+                    File(dir, "model.onnx.download_part").delete()
+                    File(dir, "graph_source.meta").delete()
+                    File(dir, "source_name.meta").delete()
+                    OnnxQuantGraphRepairer.clearRepairMarkers(dir)
+                    linkEnginePairFiles(dir)
+                }
+                DedicatedModelSlot.FAST_LCM_WEIGHTS,
+                DedicatedModelSlot.STANDARD_SD_WEIGHTS -> {
+                    dir.listFiles()?.forEach { f ->
+                        if (f.isFile &&
+                            !f.name.equals("model.onnx", ignoreCase = true) &&
+                            !f.name.equals("graph_source.meta", ignoreCase = true)
+                        ) {
+                            f.delete()
+                        }
                     }
+                    OnnxQuantGraphRepairer.clearRepairMarkers(dir)
+                    linkEnginePairFiles(dir)
                 }
-                OnnxQuantGraphRepairer.clearRepairMarkers(dir)
-                linkEnginePairFiles(dir)
-            }
-            DedicatedModelSlot.TOKENIZER -> {
-                dir.deleteRecursively()
-                File(modelsRootDir, "vocab.json").delete()
-                File(modelsRootDir, "merges.txt").delete()
-            }
-            else -> {
-                dir.deleteRecursively()
-                if (slot == DedicatedModelSlot.FACE_SWAPPER) {
-                    File(modelsRootDir, "inswapper_emap_512x512.bin").delete()
+                DedicatedModelSlot.TOKENIZER -> {
+                    dir.deleteRecursively()
+                    dir.mkdirs()
+                }
+                else -> {
+                    dir.deleteRecursively()
+                    if (slot.isCoreSlot) dir.mkdirs()
                 }
             }
+        }
+        if (slot == DedicatedModelSlot.TOKENIZER) {
+            File(modelsRootDir, "vocab.json").delete()
+            File(modelsRootDir, "merges.txt").delete()
+            File(legacyInternalRootDir, "vocab.json").delete()
+            File(legacyInternalRootDir, "merges.txt").delete()
+        }
+        if (slot == DedicatedModelSlot.FACE_SWAPPER) {
+            File(modelsRootDir, "inswapper_emap_512x512.bin").delete()
+            File(legacyInternalRootDir, "inswapper_emap_512x512.bin").delete()
         }
     }
 
@@ -1482,6 +1609,33 @@ class OnnxModelManager(private val context: Context) {
         }
     }
 
+    fun isDedicatedSlotReady(slot: DedicatedModelSlot): Boolean {
+        val dir = dedicatedFolder(slot)
+        return when (slot) {
+            DedicatedModelSlot.FAST_LCM_GRAPH,
+            DedicatedModelSlot.STANDARD_SD_GRAPH -> {
+                val f = File(dir, "model.onnx")
+                f.exists() && f.length() > 1024L && OnnxProtoCodec.inspectModelFileHeader(f) == null
+            }
+            DedicatedModelSlot.FAST_LCM_WEIGHTS,
+            DedicatedModelSlot.STANDARD_SD_WEIGHTS -> {
+                val link = linkEnginePairFiles(dir)
+                link.isWeightsInstalled
+            }
+            DedicatedModelSlot.TOKENIZER -> {
+                val v = File(dir, "vocab.json")
+                val m = File(dir, "merges.txt")
+                v.exists() && v.length() > 1024L && m.exists() && m.length() > 1024L
+            }
+            else -> {
+                val onnx = dir.listFiles()?.firstOrNull {
+                    it.isFile && it.name.endsWith(".onnx", ignoreCase = true) && it.length() > 1024L
+                }
+                onnx != null && findMissingCompanionFiles(onnx).isEmpty()
+            }
+        }
+    }
+
     fun deleteSlotModel(slot: DiffusionModelSlot) {
         activeSessions.remove(slot.folderHint)?.runCatching { close() }
         if (slot == DiffusionModelSlot.UNET) {
@@ -1489,17 +1643,25 @@ class OnnxModelManager(private val context: Context) {
             deleteDedicatedSlot(DedicatedModelSlot.FAST_LCM_WEIGHTS)
             return
         }
-        slotDir(slot).deleteRecursively()
+        File(modelsRootDir, slot.folderHint).deleteRecursively()
+        if (legacyInternalRootDir.exists() && legacyInternalRootDir.absolutePath != modelsRootDir.absolutePath) {
+            File(legacyInternalRootDir, slot.folderHint).deleteRecursively()
+        }
         File(modelsRootDir, slot.canonicalFileName).delete()
+        File(legacyInternalRootDir, slot.canonicalFileName).delete()
         if (slot == DiffusionModelSlot.FACE_SWAPPER) {
             File(modelsRootDir, "inswapper_emap_512x512.bin").delete()
+            File(legacyInternalRootDir, "inswapper_emap_512x512.bin").delete()
         }
     }
 
     fun deleteAllModels() {
         unloadSessionsFromRam()
         modelsRootDir.deleteRecursively()
-        modelsRootDir.mkdirs()
+        if (legacyInternalRootDir.exists() && legacyInternalRootDir.absolutePath != modelsRootDir.absolutePath) {
+            legacyInternalRootDir.deleteRecursively()
+        }
+        ensurePhoneModelFoldersCreated()
     }
 
     fun clearAppCache(): Long {
@@ -1528,16 +1690,27 @@ class OnnxModelManager(private val context: Context) {
         } ?: -1L
     }.getOrDefault(-1L)
 
-    private fun hasEnoughFreeSpace(requiredBytes: Long): Boolean {
+    fun availableStorageBytes(): Long {
+        val statBytes = runCatching { StatFs(modelsRootDir.absolutePath).availableBytes }.getOrDefault(0L)
+        if (statBytes > 0L) return statBytes
+        val usable = runCatching { modelsRootDir.usableSpace }.getOrDefault(0L)
+        if (usable > 0L) return usable
+        val internalStat = runCatching { StatFs(context.filesDir.absolutePath).availableBytes }.getOrDefault(0L)
+        if (internalStat > 0L) return internalStat
+        val internalUsable = runCatching { context.filesDir.usableSpace }.getOrDefault(0L)
+        return if (internalUsable > 0L) internalUsable else Long.MAX_VALUE
+    }
+
+    fun hasEnoughFreeSpace(requiredBytes: Long): Boolean {
         if (requiredBytes <= 0L) return true
-        val freeBytes = runCatching { StatFs(context.filesDir.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
+        val freeBytes = availableStorageBytes()
         val safetyReserve = 150L * 1024L * 1024L
         return freeBytes >= requiredBytes + safetyReserve
     }
 
-    private fun ensureEnoughFreeSpace(requiredBytes: Long) {
+    fun ensureEnoughFreeSpace(requiredBytes: Long) {
         if (requiredBytes <= 0L) return
-        val freeBytes = runCatching { StatFs(context.filesDir.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
+        val freeBytes = availableStorageBytes()
         val safetyReserve = 150L * 1024L * 1024L
         if (freeBytes < requiredBytes + safetyReserve) {
             error(
@@ -1619,10 +1792,62 @@ class OnnxModelManager(private val context: Context) {
     }
 
     companion object {
+        const val PHONE_MODELS_DIR_NAME = "IG_Models"
         private const val MAX_EXTERNAL_GRAPH_SHELL_BYTES = 15L * 1024L * 1024L
         private const val MAX_GRAPH_SHELL_STREAM_SCAN_BYTES = 25L * 1024L * 1024L
         private const val MAX_PROTO_HEADER_SCAN_BYTES = 48L * 1024L * 1024L
         const val MIN_VALID_COMPANION_BYTES = 64L * 1024L
+
+        @Suppress("DEPRECATION")
+        fun resolvePrimaryModelsRootDir(context: Context): File {
+            val extMedia = runCatching {
+                context.externalMediaDirs?.firstOrNull { it != null }
+            }.getOrNull()
+            val fallbackExt = runCatching {
+                context.getExternalFilesDir(null)
+            }.getOrNull()
+            val base = when {
+                extMedia != null -> File(extMedia, PHONE_MODELS_DIR_NAME)
+                fallbackExt != null -> File(fallbackExt, PHONE_MODELS_DIR_NAME)
+                else -> File(context.filesDir, PHONE_MODELS_DIR_NAME)
+            }
+            if (!base.exists()) {
+                base.mkdirs()
+            }
+            return base
+        }
+
+        fun resolveTokenizerDir(context: Context): File {
+            val primaryTok = File(resolvePrimaryModelsRootDir(context), "tokenizer")
+            if (directoryHasPayloadFiles(primaryTok)) return primaryTok
+            val legacyTok = File(context.filesDir, "onnx_models/tokenizer")
+            if (directoryHasPayloadFiles(legacyTok)) return legacyTok
+            if (!primaryTok.exists()) primaryTok.mkdirs()
+            return primaryTok
+        }
+
+        fun formatPhoneModelsDisplayPath(context: Context, rootDir: File): String {
+            val abs = rootDir.absolutePath
+            val marker = "Android/media/"
+            val idx = abs.indexOf(marker)
+            return if (idx >= 0) {
+                abs.substring(idx)
+            } else {
+                "Android/media/${context.packageName}/$PHONE_MODELS_DIR_NAME"
+            }
+        }
+
+        fun directoryHasPayloadFiles(dir: File): Boolean {
+            if (!dir.exists() || !dir.isDirectory) return false
+            return dir.listFiles()?.any { f ->
+                f.isFile &&
+                    !f.name.endsWith(".meta", ignoreCase = true) &&
+                    !f.name.endsWith(".repair_tmp", ignoreCase = true) &&
+                    !f.name.endsWith(".uploading_tmp", ignoreCase = true) &&
+                    !f.name.endsWith(".download_part", ignoreCase = true) &&
+                    f.length() > 128L
+            } == true
+        }
 
         private data class FileScanCacheKey(
             val path: String,
@@ -1728,6 +1953,7 @@ class OnnxModelManager(private val context: Context) {
                     !f.name.endsWith(".meta", ignoreCase = true) &&
                     !f.name.endsWith(".repair_tmp", ignoreCase = true) &&
                     !f.name.endsWith(".uploading_tmp", ignoreCase = true) &&
+                    !f.name.endsWith(".download_part", ignoreCase = true) &&
                     f.length() >= MIN_VALID_COMPANION_BYTES
             }.orEmpty()
 
@@ -2172,6 +2398,9 @@ class OnnxModelManager(private val context: Context) {
                     val compatMatch = filesInDir.firstOrNull {
                         it.absolutePath != onnxFile.absolutePath &&
                             !it.name.endsWith(".meta") &&
+                            !it.name.endsWith(".repair_tmp") &&
+                            !it.name.endsWith(".uploading_tmp") &&
+                            !it.name.endsWith(".download_part") &&
                             it.length() >= MIN_VALID_COMPANION_BYTES &&
                             (it.name.equals(reqName, ignoreCase = true) ||
                                 companionMatchesExpectedLocation(it.name, reqName))

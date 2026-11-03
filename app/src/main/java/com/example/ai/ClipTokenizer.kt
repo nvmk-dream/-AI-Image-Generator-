@@ -141,7 +141,7 @@ class ClipTokenizer(private val context: Context) {
 
     @Synchronized
     private fun ensureLoaded() {
-        val customTokDir = File(context.filesDir, "onnx_models/tokenizer")
+        val customTokDir = OnnxModelManager.resolveTokenizerDir(context)
         val vocabFile = File(customTokDir, "vocab.json")
         val mergesFile = File(customTokDir, "merges.txt")
         val currentSig = "${vocabFile.exists()}:${vocabFile.length()}:${vocabFile.lastModified()}|" +

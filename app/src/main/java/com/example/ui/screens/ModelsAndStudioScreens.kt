@@ -79,11 +79,13 @@ import java.io.File
 
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.UploadFile
+import com.example.ai.AutoDownloadProgressState
 import com.example.ai.DedicatedModelSlot
 import com.example.ai.DedicatedSlotStatus
 import com.example.ai.EngineLinkState
 import com.example.data.ActiveDiffusionEngine
 import com.example.ui.components.ActiveEngineSwitchCard
+import com.example.ui.components.AutoDownloadLiveBanner
 
 @Composable
 fun ModelsTabScreen(
@@ -93,6 +95,10 @@ fun ModelsTabScreen(
     importProgressText: String?,
     verificationReport: String?,
     preferredUnetMode: PreferredUnetImportMode = PreferredUnetImportMode.AUTO_FAST_MOBILE,
+    autoDownloadProgress: AutoDownloadProgressState = AutoDownloadProgressState(),
+    onOpenAutoDownloadDialog: () -> Unit = {},
+    onCancelAutoDownload: () -> Unit = {},
+    onClearAutoDownloadBanner: () -> Unit = {},
     onSelectEngine: (ActiveDiffusionEngine) -> Unit = {},
     onSelectPreferredUnetMode: (PreferredUnetImportMode) -> Unit = {},
     onSwitchUnetFromFolder: (PreferredUnetImportMode) -> Unit = {},
@@ -133,39 +139,94 @@ fun ModelsTabScreen(
                 style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold)
             )
 
+            // Live Auto-Download Banner (when downloading or finished/paused)
+            AutoDownloadLiveBanner(
+                progress = autoDownloadProgress,
+                isTamil = isTamil,
+                darkTheme = darkTheme,
+                onCancelDownload = onCancelAutoDownload,
+                onResumeOrRetry = onOpenAutoDownloadDialog,
+                onDismissBanner = onClearAutoDownloadBanner
+            )
+
             // 1. Top 1-Touch Active Engine Switch (Fast LCM vs Standard SD)
             ActiveEngineSwitchCard(
                 activeEngine = preferences.activeEngine,
                 metrics = metrics,
                 isTamil = isTamil,
                 darkTheme = darkTheme,
-                enabled = !isImporting,
+                enabled = !isImporting && !autoDownloadProgress.isDownloading,
                 tagPrefix = "models",
                 onSelectEngine = onSelectEngine
             )
 
-            // 2. Folder Auto-Import (Phone > IG) + Verify + Download Links Card
+            // 2. Direct Auto-Download (1A–6) + Folder Auto-Import (Phone > IG) + Verify Card
             FrostedGlassCard(darkTheme = darkTheme) {
                 Text(
                     text = if (isTamil) {
-                        "Folder Auto-Import (Phone > IG ஒரே கிளிக்கில் ஏற்றவும்)"
+                        "நேரடி மாடல் பதிவிறக்கம் (1A–6) & Folder Auto-Import"
                     } else {
-                        "One-Touch Folder Auto-Import (Phone > IG)"
+                        "Auto-Download (1A–6) & Folder Auto-Import"
                     },
                     color = textColor,
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                 )
                 Spacer(modifier = Modifier.height(4.dp))
+                val folderPathLabel = metrics.phoneModelsFolderPath.ifBlank {
+                    "Android/media/com.aistudio.imagegenerator.nvmkai/IG_Models"
+                }
                 Text(
                     text = if (isTamil) {
-                        "உங்கள் Phone > IG ஃபோல்டரைத் தேர்ந்தெடுத்தால் போதும் — கீழே உள்ள 8 தனித்தனி ஸ்லாட்டுகளையும் (Slot 1A, 1B, 2A, 2B, 3, 4, 5, 6) + Face Swap மாடல்களையும் ஆப் தானாகவே அடையாளம் கண்டு அந்தந்த ஸ்லாட்டில் நிரப்பிவிடும்!"
+                        "போன் ஃபோல்டர்: $folderPathLabel\n1A, 1B, 2A, 2B, 3, 4, 5, 6 மாடல்களை நேரடியாக போன் ஃபோல்டரில் பதிவிறக்கி தானாக இணைக்கலாம் அல்லது ஏற்கனவே உள்ள IG ஃபோல்டரைத் தேர்ந்தெடுக்கலாம்."
                     } else {
-                        "Select your Phone > IG folder once — the app automatically identifies and populates all 8 dedicated split slots (1A, 1B, 2A, 2B, 3, 4, 5, 6) + optional Face Swap models."
+                        "Phone Folder: $folderPathLabel\nDownload 1A, 1B, 2A, 2B, 3, 4, 5, 6 directly into your phone folder & auto-link, or import from an existing IG folder."
                     },
                     color = subColor,
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(modifier = Modifier.height(10.dp))
+
+                // Auto-Download Core Slots (1A–6) Button
+                val autoBtnShape = RoundedCornerShape(22.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .minimumInteractiveComponentSize()
+                        .shadow(8.dp, autoBtnShape, spotColor = VibrantPinkPill)
+                        .clip(autoBtnShape)
+                        .background(Brush.horizontalGradient(listOf(PurpleActionStart, VibrantPinkPill)))
+                        .border(1.3.dp, Color.White.copy(alpha = 0.88f), autoBtnShape)
+                        .clickable(
+                            enabled = !isImporting && !autoDownloadProgress.isDownloading,
+                            onClick = onOpenAutoDownloadDialog
+                        )
+                        .padding(vertical = 12.dp, horizontal = 14.dp)
+                        .testTag("models_auto_download_core_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Download,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(21.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (autoDownloadProgress.isDownloading) {
+                            if (isTamil) "IG_Models-ல் பதிவிறக்கம் நடைபெறுகிறது (${autoDownloadProgress.overallPercent}%)..."
+                            else "Auto-Downloading to IG_Models (${autoDownloadProgress.overallPercent}%)..."
+                        } else if (isTamil) {
+                            "1A–6 மாடல்களை தானாக Download & இணைக்கவும்"
+                        } else {
+                            "Auto-Download Core Slots (1A–6) to Phone"
+                        },
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 val btnShape = RoundedCornerShape(22.dp)
                 Row(

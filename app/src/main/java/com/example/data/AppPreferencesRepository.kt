@@ -71,7 +71,9 @@ data class AppPreferencesState(
     val safetyMode: ContentSafetyMode = ContentSafetyMode.BALANCED,
     val customCategories: CustomContentCategories = CustomContentCategories(),
     val savedContentSafetyPrompt: String = ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT,
-    val savedUserImagePrompt: String = ""
+    val savedUserImagePrompt: String = "",
+    val firstLaunchDownloadPromptHandled: Boolean = false,
+    val isLoadedFromDisk: Boolean = false
 ) {
     val isTamil: Boolean
         get() = language == AppLanguage.TAMIL
@@ -108,6 +110,7 @@ class AppPreferencesRepository(private val context: Context) {
         // Strictly separate keys so User Prompt and Content Safety Prompt never overwrite each other
         val SAVED_CONTENT_SAFETY_PROMPT = stringPreferencesKey("saved_content_safety_prompt")
         val SAVED_USER_IMAGE_PROMPT = stringPreferencesKey("saved_user_image_prompt")
+        val FIRST_LAUNCH_DOWNLOAD_PROMPT_HANDLED = booleanPreferencesKey("first_launch_download_prompt_handled")
     }
 
     val preferencesFlow: Flow<AppPreferencesState> = context.appDataStore.data.map { prefs ->
@@ -130,7 +133,9 @@ class AppPreferencesRepository(private val context: Context) {
             ),
             savedContentSafetyPrompt = prefs[Keys.SAVED_CONTENT_SAFETY_PROMPT]
                 ?: ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT,
-            savedUserImagePrompt = prefs[Keys.SAVED_USER_IMAGE_PROMPT] ?: ""
+            savedUserImagePrompt = prefs[Keys.SAVED_USER_IMAGE_PROMPT] ?: "",
+            firstLaunchDownloadPromptHandled = prefs[Keys.FIRST_LAUNCH_DOWNLOAD_PROMPT_HANDLED] ?: false,
+            isLoadedFromDisk = true
         )
     }
 
@@ -185,6 +190,12 @@ class AppPreferencesRepository(private val context: Context) {
     suspend fun saveUserImagePrompt(userPrompt: String) {
         context.appDataStore.edit { prefs ->
             prefs[Keys.SAVED_USER_IMAGE_PROMPT] = userPrompt
+        }
+    }
+
+    suspend fun setFirstLaunchDownloadPromptHandled(handled: Boolean) {
+        context.appDataStore.edit { prefs ->
+            prefs[Keys.FIRST_LAUNCH_DOWNLOAD_PROMPT_HANDLED] = handled
         }
     }
 
