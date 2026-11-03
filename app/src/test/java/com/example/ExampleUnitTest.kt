@@ -348,9 +348,9 @@ class ExampleUnitTest {
         assertTrue(translated.contains("traditional silk saree"))
 
         val allLinks = com.example.ai.OnnxModelDownloadCatalog.groups.flatMap { it.links }
-        assertTrue(allLinks.size >= 7)
+        assertTrue(allLinks.size >= 8)
         assertTrue(allLinks.all { it.url.startsWith("https://huggingface.co/") })
-        assertTrue(allLinks.any { it.url.endsWith("/unet/model.onnx.data") })
+        assertTrue(allLinks.any { it.url.endsWith("/unet/model_int8.onnx.data") })
         assertTrue(allLinks.any { it.url.endsWith("/unet/weights.pb") })
     }
 
@@ -430,6 +430,36 @@ class ExampleUnitTest {
                 schedulerConfigText = """{"_class_name": "PNDMScheduler"}"""
             )
         )
+    }
+
+    @Test
+    fun flatFolderSizeBasedFallbackAndWightsPbTypo_resolvesAllSlotsCleanly() {
+        val parent = "ig"
+        val candidates = listOf(
+            com.example.ai.OnnxModelManager.CandidateModelFile(0, "model.onnx", parent, 492_540_000L), // Text Encoder by size
+            com.example.ai.OnnxModelManager.CandidateModelFile(1, "model.onnx", parent, 198_080_000L), // VAE Decoder by size
+            com.example.ai.OnnxModelManager.CandidateModelFile(2, "model.onnx", parent, 136_760_000L), // VAE Encoder by size
+            com.example.ai.OnnxModelManager.CandidateModelFile(3, "model.onnx", parent, 3_050_000L)    // UNet shell + model_int8.onnx.data
+        )
+        val siblings = mapOf(
+            parent to listOf(
+                "model.onnx",
+                "model_int8.onnx.data"
+            )
+        )
+        val resolved = com.example.ai.OnnxModelManager.resolveFolderSlotMatches(candidates, siblings)
+        assertEquals(0, resolved[com.example.ai.DiffusionModelSlot.TEXT_ENCODER])
+        assertEquals(1, resolved[com.example.ai.DiffusionModelSlot.VAE_DECODER])
+        assertEquals(2, resolved[com.example.ai.DiffusionModelSlot.VAE_ENCODER])
+        assertEquals(3, resolved[com.example.ai.DiffusionModelSlot.UNET])
+
+        assertTrue(com.example.ai.OnnxModelManager.isCompanionWeightFileName("wights.pb"))
+        assertTrue(com.example.ai.OnnxModelManager.companionMatchesExpectedLocation("wights (1).pb", "weights.pb"))
+        assertTrue(com.example.ai.OnnxModelManager.companionMatchesExpectedLocation("model_int8.onnx.data", "model_int8.onnx.data"))
+
+        val allLinks = com.example.ai.OnnxModelDownloadCatalog.groups.flatMap { it.links }
+        assertTrue(allLinks.any { it.url.contains("TheyCallMeHex/LCM-Dreamshaper-V7-ONNX") })
+        assertTrue(allLinks.any { it.url.endsWith("/unet/model_int8.onnx.data") })
     }
 }
 

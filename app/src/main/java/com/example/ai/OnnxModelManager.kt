@@ -275,7 +275,12 @@ class OnnxModelManager(private val context: Context) {
                 emptyList()
             }
             val extraBytes = dir.listFiles()
-                ?.filter { it.isFile && it.absolutePath != actualFile?.absolutePath && !it.name.endsWith(".meta") }
+                ?.filter {
+                    it.isFile &&
+                        it.absolutePath != actualFile?.absolutePath &&
+                        !it.name.endsWith(".meta") &&
+                        !it.name.endsWith(".repair_tmp")
+                }
                 ?.sumOf { it.length() } ?: 0L
             val originLabel = File(dir, "source_name.meta").takeIf { it.exists() }
                 ?.readText()?.trim().orEmpty()
@@ -467,6 +472,7 @@ class OnnxModelManager(private val context: Context) {
             ?: existingOnnx.name
         metaFile.writeText("$baseLabel + $targetCompanionName")
 
+        OnnxQuantGraphRepairer.clearRepairMarkers(targetDir)
         activeSessions.remove(slot)?.runCatching { close() }
         targetCompanionName to destCompanion.length()
     }
@@ -1002,10 +1008,12 @@ class OnnxModelManager(private val context: Context) {
                 if (normCand == "model.onnx") {
                     val siblings = allFileNamesByParent[cand.parentNameLower].orEmpty()
                     val hasExternalWeights = siblings.any { isCompanionWeightFileName(it) }
+                    val sharesDiffusionFolder = cand.parentNameLower in coreMatchedParents
                     // A graph shell must be <= 15 MB to pair with external weights, OR a full standalone UNet > 1.5 GB.
-                    // This explicitly prevents VAE decoders (198 MB) or text encoders (490 MB) from being mistaken for UNet.
-                    (cand.fileSizeBytes <= 15_000_000L && hasExternalWeights) ||
-                        cand.fileSizeBytes > 1_500_000_000L
+                    // This prevents VAE decoders (198 MB) or text encoders (490 MB) from being mistaken for UNet.
+                    (cand.fileSizeBytes <= MAX_EXTERNAL_GRAPH_SHELL_BYTES && hasExternalWeights) ||
+                        cand.fileSizeBytes > 1_500_000_000L ||
+                        (cand.fileSizeBytes == 0L && sharesDiffusionFolder)
                 } else {
                     false
                 }
@@ -1042,18 +1050,27 @@ class OnnxModelManager(private val context: Context) {
             val siblings = allFileNamesByParent[cand.parentNameLower].orEmpty()
             val compSizes = companionSizesByParent[cand.parentNameLower].orEmpty()
 
-            val hasLcmOrInt8Keyword = normCand.contains("lcm") ||
-                normCand.contains("int8") ||
-                cand.parentNameLower.contains("lcm") ||
-                cand.parentNameLower.contains("int8")
-
             val stemDataNames = listOf(
                 "${normCand}.data",
                 "${normCand}_data",
                 "${stem}.onnx.data",
-                "${stem}.onnx_data"
+                "${stem}.onnx_data",
+                "${stem}_int8.onnx.data",
+                "${stem}_int8.onnx_data",
+                "${stem}_quant.onnx.data",
+                "${stem}_quant.onnx_data"
             )
             val matchedStemData = siblings.firstOrNull { it in stemDataNames }
+                ?: siblings.firstOrNull {
+                    it.startsWith("${stem}_") && (it.endsWith(".onnx.data") || it.endsWith(".onnx_data"))
+                }
+
+            val hasLcmOrInt8Keyword = normCand.contains("lcm") ||
+                normCand.contains("int8") ||
+                cand.parentNameLower.contains("lcm") ||
+                cand.parentNameLower.contains("int8") ||
+                (matchedStemData != null && matchedStemData.contains("int8"))
+
             val stemDataBytes = matchedStemData?.let { compSizes[it] } ?: 0L
             val weightsPbBytes = compSizes["weights.pb"]
                 ?: compSizes["wights.pb"]
@@ -1098,11 +1115,11 @@ class OnnxModelManager(private val context: Context) {
 
         /**
          * Resolves all slots cleanly:
-         * 1. Non-UNet slots claim their explicit matches first by keyword / folder name.
-         * 2. Smart Flat-Folder Fallback: If non-UNet slots are still missing (e.g. flat download folder "IG"
-         *    with model (3).onnx, model (4).onnx etc.), match them by standard physical component file sizes.
-         * 3. All eligible UNet candidates (both explicit unet.onnx and flat-folder model.onnx + companion
-         *    weights) are evaluated together and ranked by [preferredUnetMode].
+         * 1. Non-UNet slots claim their explicit matches first so subfolders like text_encoder/model.onnx
+         *    are never mistaken for UNet.
+         * 2. All eligible UNet candidates (both explicit unet.onnx and flat-folder model.onnx + companion
+         *    weights) are evaluated together and ranked by [preferredUnetMode] — automatically preferring
+         *    fast ~860 MB LCM INT8 models over slow 3.44 GB FP32 weights.pb when both exist in one folder!
          */
         fun resolveFolderSlotMatches(
             candidates: List<CandidateModelFile>,
@@ -1148,7 +1165,7 @@ class OnnxModelManager(private val context: Context) {
                 }
             }
             if (DiffusionModelSlot.VAE_ENCODER !in matched) {
-                // VAE Encoder is ~136 MB (typical range: 100 MB .. 169_000_000L)
+                // VAE Encoder is ~136 MB (typical range: 100 MB .. 169 MB)
                 val vaeEnc = candidates.filter { it.index !in claimedIndices }.firstOrNull { cand ->
                     cand.fileSizeBytes in 100_000_000L..169_000_000L
                 }
@@ -1223,6 +1240,9 @@ class OnnxModelManager(private val context: Context) {
             val onnxStem = onnxLower.removeSuffix(".onnx")
             val compLower = normalizeBrowserDuplicateName(companionFileName).lowercase(Locale.US)
 
+            val isStemPrefixedData = compLower.startsWith("${onnxStem}_") &&
+                (compLower.endsWith(".onnx.data") || compLower.endsWith(".onnx_data"))
+
             if (onnxFileForRefScan != null && onnxFileForRefScan.exists()) {
                 val protoLocations = extractExternalDataLocations(onnxFileForRefScan)
                 if (protoLocations.isNotEmpty()) {
@@ -1231,7 +1251,8 @@ class OnnxModelManager(private val context: Context) {
                         compLower == "${onnxLower}.data" ||
                         compLower == "${onnxStem}.onnx_data" ||
                         compLower == "${onnxStem}.onnx.data" ||
-                        compLower == "${onnxStem}_weights.pb"
+                        compLower == "${onnxStem}_weights.pb" ||
+                        isStemPrefixedData
                 }
             }
 
@@ -1239,7 +1260,8 @@ class OnnxModelManager(private val context: Context) {
                 compLower == "${onnxLower}.data" ||
                 compLower == "${onnxStem}.onnx_data" ||
                 compLower == "${onnxStem}.onnx.data" ||
-                compLower == "${onnxStem}_weights.pb"
+                compLower == "${onnxStem}_weights.pb" ||
+                isStemPrefixedData
             ) {
                 return true
             }

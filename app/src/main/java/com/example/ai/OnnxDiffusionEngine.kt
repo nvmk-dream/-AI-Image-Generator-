@@ -128,14 +128,15 @@ class OnnxDiffusionEngine(
                 continue
             }
             val t0 = System.currentTimeMillis()
-            val session = createSafeSession(env, file, inferenceMode)
+            var repairTag = ""
+            val session = createSafeSession(env, file, inferenceMode) { repairTag = " [Auto-Optimized INT8]" }
             session.use { s ->
                 val dt = System.currentTimeMillis() - t0
                 val inputsDesc = s.inputInfo.entries.joinToString { (name, node) ->
                     val ti = node.info as? TensorInfo
                     "$name:${ti?.type ?: "?"}${ti?.shape?.contentToString() ?: ""}"
                 }
-                lines.add("✅ ${slot.canonicalFileName} (${dt}ms) -> $inputsDesc")
+                lines.add("✅ ${slot.canonicalFileName}$repairTag (${dt}ms) -> $inputsDesc")
                 verifiedCount++
             }
         }
@@ -243,7 +244,22 @@ class OnnxDiffusionEngine(
         var executedTotalSteps = plannedSteps
 
         // 5. Stage 2: Run UNet Denoising Loop (auto-adapts Euler CFG if standard SD 1.5 UNet is installed)
-        val denoisedLatents = createSafeSession(env, unetFile, inferenceMode).use { unetSession ->
+        val denoisedLatents = createSafeSession(
+            env = env,
+            modelFile = unetFile,
+            inferenceMode = inferenceMode,
+            onRepairStatus = { repairMsg ->
+                onProgress(
+                    GenerationProgress(
+                        stageTitle = repairMsg,
+                        currentStep = 0,
+                        totalSteps = plannedSteps,
+                        percent = 15,
+                        elapsedMs = System.currentTimeMillis() - startMs
+                    )
+                )
+            }
+        ).use { unetSession ->
             val isLcmModel = detectLikelyLcmModel(unetFile = unetFile, unetSession = unetSession)
             val effectiveSampler = if (samplerType == SamplerType.LCM_FAST && !isLcmModel) {
                 SamplerType.EULER_STANDARD
@@ -561,7 +577,22 @@ class OnnxDiffusionEngine(
         )
         checkNotCancelled()
 
-        val denoisedLatents = createSafeSession(env, unetFile, inferenceMode).use { unetSession ->
+        val denoisedLatents = createSafeSession(
+            env = env,
+            modelFile = unetFile,
+            inferenceMode = inferenceMode,
+            onRepairStatus = { repairMsg ->
+                onProgress(
+                    GenerationProgress(
+                        stageTitle = repairMsg,
+                        currentStep = 0,
+                        totalSteps = activeSteps,
+                        percent = 23,
+                        elapsedMs = System.currentTimeMillis() - startMs
+                    )
+                )
+            }
+        ).use { unetSession ->
             val isLcmModel = detectLikelyLcmModel(unetFile = unetFile, unetSession = unetSession)
             val effectiveSampler = if (samplerType == SamplerType.LCM_FAST && !isLcmModel) {
                 SamplerType.EULER_STANDARD
@@ -808,7 +839,12 @@ class OnnxDiffusionEngine(
             ?.readText()
             .orEmpty()
         val companionBytes = unetFile.parentFile?.listFiles()
-            ?.filter { it.isFile && it.absolutePath != unetFile.absolutePath && !it.name.endsWith(".meta") }
+            ?.filter {
+                it.isFile &&
+                    it.absolutePath != unetFile.absolutePath &&
+                    !it.name.endsWith(".meta") &&
+                    !it.name.endsWith(".repair_tmp")
+            }
             ?.sumOf { it.length() } ?: 0L
         val totalUnetBytes = unetFile.length() + companionBytes
         val schedulerCfgFile = File(modelManager.modelsRootDir, "tokenizer/scheduler_config.json")
@@ -837,16 +873,50 @@ class OnnxDiffusionEngine(
     private fun createSafeSession(
         env: OrtEnvironment,
         modelFile: File,
-        inferenceMode: String
+        inferenceMode: String,
+        onRepairStatus: ((String) -> Unit)? = null
+    ): OrtSession {
+        val repairMode = OnnxQuantGraphRepairer.ensureCompatibleBeforeSession(modelFile, onRepairStatus)
+        return try {
+            openConfiguredSession(env, modelFile, inferenceMode, repairMode)
+        } catch (firstError: Throwable) {
+            val msg = firstError.message.orEmpty()
+            val needsQdqFallback = repairMode != ConvRepairMode.TIER2_QDQ_CONV &&
+                (msg.contains("ConvInteger", ignoreCase = true) ||
+                    msg.contains("NOT_IMPLEMENTED", ignoreCase = true))
+            if (needsQdqFallback && OnnxQuantGraphRepairer.upgradeToQdqConv(modelFile, onRepairStatus)) {
+                openConfiguredSession(
+                    env = env,
+                    modelFile = modelFile,
+                    inferenceMode = inferenceMode,
+                    repairMode = ConvRepairMode.TIER2_QDQ_CONV
+                )
+            } else {
+                throw firstError
+            }
+        }
+    }
+
+    private fun openConfiguredSession(
+        env: OrtEnvironment,
+        modelFile: File,
+        inferenceMode: String,
+        repairMode: ConvRepairMode
     ): OrtSession {
         val preferNnapi = inferenceMode.contains("NNAPI", ignoreCase = true)
         val lowRamMode = inferenceMode.contains("Low-RAM", ignoreCase = true)
         val companionBytes = modelFile.parentFile?.listFiles()
-            ?.filter { it.isFile && it.absolutePath != modelFile.absolutePath && !it.name.endsWith(".meta") }
+            ?.filter {
+                it.isFile &&
+                    it.absolutePath != modelFile.absolutePath &&
+                    !it.name.endsWith(".meta") &&
+                    !it.name.endsWith(".repair_tmp")
+            }
             ?.sumOf { it.length() } ?: 0L
         val totalBytes = modelFile.length() + companionBytes
         val isLargeExternalModel = totalBytes > 450L * 1024L * 1024L
         val isUltraLargeModel = totalBytes > 1_500L * 1024L * 1024L
+        val isStreamingQdqLargeModel = repairMode == ConvRepairMode.TIER2_QDQ_CONV && isLargeExternalModel
         val perfThreads = computePerformanceThreadCount(Runtime.getRuntime().availableProcessors())
 
         fun applyBaseTuning(opts: OrtSession.SessionOptions, optLevel: OrtSession.SessionOptions.OptLevel) {
@@ -855,10 +925,19 @@ class OnnxDiffusionEngine(
             opts.setInterOpNumThreads(1)
             opts.setIntraOpNumThreads(perfThreads)
             runCatching { opts.addConfigEntry("session.intra_op.allow_spinning", "0") }
-            if (isLargeExternalModel || lowRamMode) {
+            if (isLargeExternalModel || lowRamMode || isStreamingQdqLargeModel) {
                 runCatching { opts.addConfigEntry("session.disable_prepacking", "1") }
                 opts.setCPUArenaAllocator(false)
                 opts.setMemoryPatternOptimization(false)
+            }
+        }
+
+        // For large Tier-2 QDQ rewritten models, use NO_OPT directly so ConstantFolding does not
+        // pre-expand ~595 MB of 8-bit Conv weights into ~2.38 GB of FP32 weights in RAM.
+        if (isStreamingQdqLargeModel) {
+            OrtSession.SessionOptions().use { opts ->
+                applyBaseTuning(opts, OrtSession.SessionOptions.OptLevel.NO_OPT)
+                return env.createSession(modelFile.absolutePath, opts)
             }
         }
 
@@ -876,7 +955,7 @@ class OnnxDiffusionEngine(
             }
         }
 
-        // Fast ARM64 NEON/FP16 XNNPACK acceleration for self-contained Text Encoder & VAE models (< 550 MB)
+        // Fast ARM64 NEON/FP16 XNNPACK acceleration for self-contained Text Encoder & VAE models (< 450 MB)
         if (!isLargeExternalModel && !lowRamMode) {
             runCatching {
                 OrtSession.SessionOptions().use { opts ->
@@ -893,17 +972,29 @@ class OnnxDiffusionEngine(
             isUltraLargeModel || lowRamMode -> OrtSession.SessionOptions.OptLevel.BASIC_OPT
             else -> OrtSession.SessionOptions.OptLevel.ALL_OPT
         }
-        runCatching {
+        val primaryError: Throwable = try {
             OrtSession.SessionOptions().use { opts ->
                 applyBaseTuning(opts, targetOptLevel)
                 return env.createSession(modelFile.absolutePath, opts)
             }
+        } catch (t: Throwable) {
+            val errMsg = t.message.orEmpty()
+            if (errMsg.contains("ConvInteger", ignoreCase = true) ||
+                errMsg.contains("NOT_IMPLEMENTED", ignoreCase = true)
+            ) {
+                throw t
+            }
+            t
         }
 
-        // Ultimate safety fallback if any exotic custom graph node dislikes graph fusion
-        OrtSession.SessionOptions().use { opts ->
-            applyBaseTuning(opts, OrtSession.SessionOptions.OptLevel.NO_OPT)
-            return env.createSession(modelFile.absolutePath, opts)
+        // Safety fallback if a custom graph fusion pass fails (preserves primaryError if NO_OPT also fails)
+        return try {
+            OrtSession.SessionOptions().use { opts ->
+                applyBaseTuning(opts, OrtSession.SessionOptions.OptLevel.NO_OPT)
+                env.createSession(modelFile.absolutePath, opts)
+            }
+        } catch (_: Throwable) {
+            throw primaryError
         }
     }
 

@@ -801,24 +801,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val cancelled = err is CancellationException ||
             err.message?.contains("cancelled", ignoreCase = true) == true
         val refreshedMetrics = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
-        val rawMsg = err.message ?: "Unknown generation error"
-        val isTamil = uiState.value.preferences.isTamil
-        val cleanMsg = when {
-            rawMsg.contains("ConvInteger", ignoreCase = true) || rawMsg.contains("ORT_NOT_IMPLEMENTED", ignoreCase = true) -> {
-                if (isTamil) {
-                    "⚠️ இந்த INT8 மாடல் கம்ப்யூட்டர்களுக்கானது (ConvInteger). உங்கள் ஆண்ட்ராய்டு மொபைல் போன் பிராசஸர் (ARM64) இதை ஆதரிக்காது.\n\nதீர்வு: Settings → 'ONNX Model Download Links' சென்று மொபைலில் 100% இயங்கும் Fast LCM FP32 அல்லது Standard SD 1.5 மாடலைப் பயன்படுத்தவும்."
-                } else {
-                    "⚠️ This INT8 UNet was exported with ConvInteger(10), which is unsupported on mobile ARM64 processors.\n\nFix: Go to Settings → 'ONNX Model Download Links' and download the mobile-compatible Fast LCM FP32 or Standard SD 1.5 model."
-                }
-            }
-            else -> rawMsg
-        }
         transientState.update {
             it.copy(
                 isGenerating = false,
                 generationProgress = null,
                 metrics = refreshedMetrics,
-                generationErrorMessage = if (cancelled) null else cleanMsg,
+                generationErrorMessage = if (cancelled) null else err.message,
                 statusToastMessage = if (cancelled) "Cancelled & RAM freed." else null
             )
         }

@@ -27,21 +27,83 @@ object OnnxModelDownloadCatalog {
 
     val groups: List<OnnxDownloadGroup> = listOf(
         OnnxDownloadGroup(
-            id = "lcm_fast_mobile_fp32",
-            badgeLabelEn = "RECOMMENDED • FAST MOBILE (4–6 STEPS)",
-            badgeLabelTa = "பரிந்துரைக்கப்படுகிறது • மொபைலுக்கு ஏற்றது (4–6 படிகள்)",
-            titleEn = "Option 1: Fast LCM FP32 UNet (Mobile Compatible)",
-            titleTa = "விருப்பம் 1: மொபைலில் இயங்கும் Fast LCM FP32 UNet",
-            descriptionEn = "Runs in 4–6 steps without ConvInteger errors on Android ARM64. Download model.onnx and model.onnx_data into 'unet' folder without renaming.",
-            descriptionTa = "மொபைல் பிராசஸரில் (ARM64) 4–6 படிகளில் வேகமாக இயங்கக்கூடிய Fast LCM மாடல். இதில் ConvInteger எரர் வராது. 'unet' ஃபோல்டரில் சேமிக்கவும்.",
+            id = "lcm_fast_mobile",
+            badgeLabelEn = "RECOMMENDED • FAST MOBILE",
+            badgeLabelTa = "பரிந்துரைக்கப்படுகிறது • வேகமான மொபைல் மாடல்",
+            titleEn = "Option 1: Fast LCM INT8 UNet (~860 MB)",
+            titleTa = "விருப்பம் 1: வேகமான LCM INT8 UNet (~860 MB)",
+            descriptionEn = "Best for Android phones (4–6 steps, low RAM, auto-optimized on first run). Download BOTH model.onnx and model_int8.onnx.data into a 'unet' subfolder without renaming.",
+            descriptionTa = "மொபைலில் குறைந்த RAM-ல் 4–6 படிகளில் வேகமாகப் படம் உருவாக்க சிறந்தது (முதல் முறை தானாகவே Android CPU-க்கு optimize ஆகும்). model.onnx மற்றும் model_int8.onnx.data இரண்டையும் பெயர் மாற்றாமல் 'unet' ஃபோல்டரில் சேமிக்கவும்.",
             isRecommended = true,
+            links = listOf(
+                OnnxDownloadLinkItem(
+                    id = "lcm_unet_folder",
+                    titleEn = "UNet Folder Page (Hugging Face)",
+                    titleTa = "UNet மாடல் பக்கம் (Hugging Face)",
+                    subtitleEn = "Browse model.onnx + model_int8.onnx.data in browser",
+                    subtitleTa = "model.onnx + model_int8.onnx.data ஃபைல்களைப் பார்க்க",
+                    sizeBadge = "Folder",
+                    url = "https://huggingface.co/latentdivergence/lcm-dreamshaper-int8-onnx/tree/main/unet",
+                    isDirectFile = false
+                ),
+                OnnxDownloadLinkItem(
+                    id = "lcm_unet_graph",
+                    titleEn = "1. model.onnx (UNet Graph)",
+                    titleTa = "1. model.onnx (UNet கட்டமைப்பு)",
+                    subtitleEn = "Required graph file — keep name as model.onnx",
+                    subtitleTa = "பெயரை மாற்றாமல் model.onnx என்றே சேமிக்கவும்",
+                    sizeBadge = "~3.1 MB",
+                    url = "https://huggingface.co/latentdivergence/lcm-dreamshaper-int8-onnx/resolve/main/unet/model.onnx",
+                    isDirectFile = true
+                ),
+                OnnxDownloadLinkItem(
+                    id = "lcm_unet_data",
+                    titleEn = "2. model_int8.onnx.data (UNet Weights)",
+                    titleTa = "2. model_int8.onnx.data (முக்கிய எடை ஃபைல்)",
+                    subtitleEn = "Required INT8 external weights — keep exact name model_int8.onnx.data",
+                    subtitleTa = "பெயரை மாற்றாமல் model_int8.onnx.data என்றே சேமிக்கவும்",
+                    sizeBadge = "~861 MB",
+                    url = "https://huggingface.co/latentdivergence/lcm-dreamshaper-int8-onnx/resolve/main/unet/model_int8.onnx.data",
+                    isDirectFile = true
+                ),
+                OnnxDownloadLinkItem(
+                    id = "lcm_full_repo",
+                    titleEn = "Full LCM INT8 Pipeline Repo (All 4 Core Models)",
+                    titleTa = "முழு LCM INT8 தொகுப்பு (4 Core ONNX மாடல்கள்)",
+                    subtitleEn = "Includes text_encoder, unet, vae_decoder, vae_encoder & tokenizer",
+                    subtitleTa = "text_encoder, unet, vae_decoder, vae_encoder அனைத்தும் உள்ளது",
+                    sizeBadge = "Full Repo",
+                    url = "https://huggingface.co/latentdivergence/lcm-dreamshaper-int8-onnx/tree/main",
+                    isDirectFile = false
+                ),
+                OnnxDownloadLinkItem(
+                    id = "lcm_fp16_repo",
+                    titleEn = "Alternative: LCM Dreamshaper v7 FP16 ONNX Repo",
+                    titleTa = "மாற்று விருப்பம்: LCM Dreamshaper v7 FP16 ONNX தொகுப்பு",
+                    subtitleEn = "Native FP16/FP32 LCM ONNX models without INT8 quantization",
+                    subtitleTa = "INT8 இல்லாத நேரடி LCM ONNX மாடல் தொகுப்பு",
+                    sizeBadge = "FP16 Repo",
+                    url = "https://huggingface.co/aislamov/lcm-dreamshaper-v7-onnx/tree/main",
+                    isDirectFile = false
+                )
+            )
+        ),
+        OnnxDownloadGroup(
+            id = "lcm_fast_mobile_fp32",
+            badgeLabelEn = "ALTERNATIVE • FAST LCM FP32 (4–6 STEPS)",
+            badgeLabelTa = "மாற்று வேகமான மாடல் • Fast LCM FP32 (4–6 படிகள்)",
+            titleEn = "Option 2: Fast LCM FP32 UNet (~3.4 GB)",
+            titleTa = "விருப்பம் 2: வேகமான Fast LCM FP32 UNet (~3.4 GB)",
+            descriptionEn = "Full-precision 4–6 step Fast LCM model (no quantization). Download model.onnx and model.onnx_data together into a 'unet' folder without renaming.",
+            descriptionTa = "4–6 படிகளில் வேகமாக இயங்கும் முழு அளவு Fast LCM மாடல். model.onnx மற்றும் model.onnx_data இரண்டையும் பெயர் மாற்றாமல் 'unet' ஃபோல்டரில் சேமிக்கவும்.",
+            isRecommended = false,
             links = listOf(
                 OnnxDownloadLinkItem(
                     id = "lcm_hex_unet_folder",
                     titleEn = "Fast LCM UNet Folder (TheyCallMeHex)",
                     titleTa = "Fast LCM UNet பக்கம் (TheyCallMeHex)",
-                    subtitleEn = "Compatible FP32 Fast LCM UNet directory",
-                    subtitleTa = "மொபைலுக்கு ஏற்ற Fast LCM UNet ஃபைல்கள்",
+                    subtitleEn = "Full FP32 Fast LCM UNet directory",
+                    subtitleTa = "முழு அளவு Fast LCM UNet ஃபைல்கள் பக்கம்",
                     sizeBadge = "Folder",
                     url = "https://huggingface.co/TheyCallMeHex/LCM-Dreamshaper-V7-ONNX/tree/main/unet",
                     isDirectFile = false
@@ -68,8 +130,8 @@ object OnnxModelDownloadCatalog {
                 ),
                 OnnxDownloadLinkItem(
                     id = "lcm_hex_full_repo",
-                    titleEn = "Full LCM Pipeline Repo (All Core Models)",
-                    titleTa = "முழு LCM தொகுப்பு பக்கம் (அனைத்து மாடல்கள்)",
+                    titleEn = "Full LCM FP32 Pipeline Repo (All Core Models)",
+                    titleTa = "முழு LCM FP32 தொகுப்பு பக்கம் (அனைத்து மாடல்கள்)",
                     subtitleEn = "Includes text_encoder, unet, vae_decoder, vae_encoder",
                     subtitleTa = "text_encoder, unet, vae_decoder, vae_encoder அனைத்தும் உள்ளது",
                     sizeBadge = "Full Repo",
@@ -79,53 +141,11 @@ object OnnxModelDownloadCatalog {
             )
         ),
         OnnxDownloadGroup(
-            id = "lcm_int8_pc_warning",
-            badgeLabelEn = "⚠️ PC ONLY • NOT FOR MOBILE ARM64",
-            badgeLabelTa = "⚠️ கணினிகளுக்கு மட்டும் • மொபைலில் இயங்காது",
-            titleEn = "Option 3: Fast LCM INT8 (~860 MB - x86 PC Only)",
-            titleTa = "விருப்பம் 3: Fast LCM INT8 (~860 MB - PC மட்டும்)",
-            descriptionEn = "Warning: Contains ConvInteger(10) unsupported on mobile ARM64 processors. Runs on x86 emulators/desktops only.",
-            descriptionTa = "எச்சரிக்கை: இதில் ConvInteger(10) இருப்பதால் மொபைல் போன்களில் இயங்காது. கணினி அல்லது x86 எமுலேட்டர்களில் மட்டுமே இயங்கும்.",
-            isRecommended = false,
-            links = listOf(
-                OnnxDownloadLinkItem(
-                    id = "lcm_unet_folder",
-                    titleEn = "INT8 UNet Folder (PC Only)",
-                    titleTa = "INT8 UNet பக்கம் (PC மட்டும்)",
-                    subtitleEn = "x86 PC only — causes ConvInteger error on mobile phones",
-                    subtitleTa = "கணினிக்கு மட்டும் — மொபைல் போனில் ConvInteger எரர் வரும்",
-                    sizeBadge = "Folder",
-                    url = "https://huggingface.co/latentdivergence/lcm-dreamshaper-int8-onnx/tree/main/unet",
-                    isDirectFile = false
-                ),
-                OnnxDownloadLinkItem(
-                    id = "lcm_unet_graph",
-                    titleEn = "1. model.onnx (Graph)",
-                    titleTa = "1. model.onnx (கட்டமைப்பு)",
-                    subtitleEn = "INT8 graph shell",
-                    subtitleTa = "INT8 கட்டமைப்பு ஃபைல்",
-                    sizeBadge = "~2 MB",
-                    url = "https://huggingface.co/latentdivergence/lcm-dreamshaper-int8-onnx/resolve/main/unet/model.onnx",
-                    isDirectFile = true
-                ),
-                OnnxDownloadLinkItem(
-                    id = "lcm_unet_data",
-                    titleEn = "2. model.onnx.data (INT8 Weights)",
-                    titleTa = "2. model.onnx.data (INT8 எடை ஃபைல்)",
-                    subtitleEn = "ConvInteger weights — PC only",
-                    subtitleTa = "ConvInteger ஃபைல் — PC-க்கு மட்டும்",
-                    sizeBadge = "~860 MB",
-                    url = "https://huggingface.co/latentdivergence/lcm-dreamshaper-int8-onnx/resolve/main/unet/model.onnx.data",
-                    isDirectFile = true
-                )
-            )
-        ),
-        OnnxDownloadGroup(
             id = "sd15_fp32_weights_pb",
             badgeLabelEn = "STANDARD • FULL FP32",
             badgeLabelTa = "சாதாரண முழு அளவு • FP32 (3.44 GB)",
-            titleEn = "Option 2: Standard SD UNet (model.onnx + weights.pb)",
-            titleTa = "விருப்பம் 2: முழு FP32 UNet (model.onnx + weights.pb)",
+            titleEn = "Option 3: Standard SD UNet (model.onnx + weights.pb)",
+            titleTa = "விருப்பம் 3: முழு FP32 UNet (model.onnx + weights.pb)",
             descriptionEn = "Matches 1.09 MB split UNet format. Requires 3.44 GB storage and high RAM. Download matching model.onnx + weights.pb pair together.",
             descriptionTa = "1.09 MB unet.onnx வகையான முழு மாடல். இதற்கு 3.44 GB இடமும் அதிக RAM-உம் தேவை. ஒரே தொகுப்பில் உள்ள model.onnx + weights.pb ஜோடியை ஒன்றாகப் பதிவிறக்கவும்.",
             isRecommended = false,
