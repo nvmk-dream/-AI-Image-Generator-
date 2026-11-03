@@ -67,9 +67,10 @@ import coil.compose.AsyncImage
 import com.example.ai.GenerationProgress
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.ai.SamplerType
-import com.example.ai.UnetVariant
+import com.example.data.ActiveDiffusionEngine
 import com.example.data.AppPreferencesState
 import com.example.data.GeneratedCreation
+import com.example.ui.components.ActiveEngineSwitchCard
 import com.example.ui.components.CircularGlowIconButton
 import com.example.ui.components.FrostedGlassCard
 import com.example.ui.theme.DeepPlumText
@@ -96,6 +97,7 @@ fun TextToImageScreen(
     isImportingModels: Boolean = false,
     importProgressText: String? = null,
     onQuickSwitchToFastLcmFolder: () -> Unit = {},
+    onSelectEngine: (ActiveDiffusionEngine) -> Unit = {},
     onResolutionChange: (String) -> Unit = {},
     onUserPromptChange: (String) -> Unit,
     onGenerate: (sampler: SamplerType, steps: Int, guidanceScale: Float, seed: Long, negativePrompt: String) -> Unit,
@@ -114,15 +116,36 @@ fun TextToImageScreen(
     val textColor = if (darkTheme) Color.White else DeepPlumText
     val subColor = if (darkTheme) Color(0xFFE1C9F7) else Color(0xFF4F376E)
 
-    var selectedSampler by remember { mutableStateOf(SamplerType.LCM_FAST) }
-    var steps by remember { mutableIntStateOf(6) }
-    var guidanceScale by remember { mutableFloatStateOf(1.5f) }
+    var selectedSampler by remember {
+        mutableStateOf(
+            if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) SamplerType.LCM_FAST
+            else SamplerType.EULER_STANDARD
+        )
+    }
+    var steps by remember {
+        mutableIntStateOf(if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) 6 else 16)
+    }
+    var guidanceScale by remember {
+        mutableFloatStateOf(if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) 1.5f else 7.0f)
+    }
     var seed by remember { mutableLongStateOf(Random.nextLong(100_000L, 999_999_999L)) }
     var negativePrompt by remember {
         mutableStateOf("blurry, low quality, deformed hands, distorted face, extra limbs")
     }
     var showSafetyCombinedPreview by remember { mutableStateOf(false) }
     var liveElapsedSec by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(preferences.activeEngine) {
+        if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) {
+            selectedSampler = SamplerType.LCM_FAST
+            steps = 6
+            guidanceScale = 1.5f
+        } else {
+            selectedSampler = SamplerType.EULER_STANDARD
+            steps = 16
+            guidanceScale = 7.0f
+        }
+    }
 
     LaunchedEffect(isGenerating) {
         if (isGenerating) {
@@ -197,65 +220,16 @@ fun TextToImageScreen(
                 }
             }
 
-            // Active UNet Status + Quick Resolution Strip (384×384 Fast vs 512×512 HD)
-            FrostedGlassCard(darkTheme = darkTheme) {
-                val isSlowFp32 = metrics.unetVariant == UnetVariant.HEAVY_FP32
-                Text(
-                    text = metrics.activeUnetBadgeLabel(isTamil),
-                    color = if (isSlowFp32 && !darkTheme) Color(0xFFE65100) else textColor,
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold)
-                )
-
-                if (isSlowFp32) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = if (isTamil) {
-                            "⚠️ தற்போது 3.44 GB (weights.pb) மாடல் உள்ளது — CPU-வில் 1 Step முடிய ~3 நிமிடம் ஆகும்! உங்கள் Folder-ல் உள்ள வேகமான ~860 MB Fast LCM மாடலுக்கு மாற்ற கீழே தட்டவும்:"
-                        } else {
-                            "⚠️ Slow 3.44 GB FP32 UNet is loaded (~3 min/step on CPU). Switch to your ~860 MB Fast LCM model in 1 tap:"
-                        },
-                        color = subColor,
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .minimumInteractiveComponentSize()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Brush.horizontalGradient(listOf(PinkGlowStart, VibrantPinkPill)))
-                            .border(1.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(14.dp))
-                            .clickable(enabled = !isGenerating && !isImportingModels) {
-                                onQuickSwitchToFastLcmFolder()
-                            }
-                            .padding(vertical = 9.dp, horizontal = 12.dp)
-                            .testTag("txt2img_switch_to_fast_lcm_button")
-                    ) {
-                        if (isImportingModels) {
-                            CircularProgressIndicator(
-                                color = Color.White,
-                                strokeWidth = 2.2.dp,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
-                        Text(
-                            text = if (isImportingModels) {
-                                importProgressText ?: "Importing Fast LCM..."
-                            } else if (isTamil) {
-                                "⚡ Fast LCM (~860 MB) மாடலுக்கு மாற்றுக (Folder)"
-                            } else {
-                                "⚡ Switch to Fast LCM (~860 MB) from Folder"
-                            },
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
+            // Top 1-Touch Active Engine Switch + Quick Resolution Strip
+            ActiveEngineSwitchCard(
+                activeEngine = preferences.activeEngine,
+                metrics = metrics,
+                isTamil = isTamil,
+                darkTheme = darkTheme,
+                enabled = !isGenerating && !isImportingModels,
+                tagPrefix = "txt2img",
+                onSelectEngine = onSelectEngine
+            ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -445,6 +419,14 @@ fun TextToImageScreen(
                                     selectedSampler = sampler
                                     steps = sampler.defaultSteps
                                     guidanceScale = sampler.defaultCfg
+                                    val targetEngine = if (sampler == SamplerType.LCM_FAST) {
+                                        ActiveDiffusionEngine.FAST_LCM
+                                    } else {
+                                        ActiveDiffusionEngine.STANDARD_SD
+                                    }
+                                    if (preferences.activeEngine != targetEngine) {
+                                        onSelectEngine(targetEngine)
+                                    }
                                 }
                                 .padding(vertical = 8.dp, horizontal = 6.dp)
                                 .testTag("sampler_${sampler.name.lowercase()}")
@@ -495,7 +477,7 @@ fun TextToImageScreen(
                 )
 
                 // Generate or Cancel Button
-                val modelsReady = metrics.isTxt2ImgReady
+                val modelsReady = metrics.isTxt2ImgReadyFor(preferences.activeEngine)
                 val btnShape = RoundedCornerShape(22.dp)
 
                 if (isGenerating) {
@@ -598,18 +580,18 @@ fun TextToImageScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = when {
-                                modelsReady -> "Generate Offline Image"
-                                metrics.incompleteSlots.isNotEmpty() -> {
-                                    val missing = metrics.incompleteSlots.first().missingCompanionFiles.firstOrNull() ?: "weights.pb"
-                                    if (isTamil) {
-                                        "UNet $missing இணைக்கவும் (${metrics.installedCount}/4)"
-                                    } else {
-                                        "Attach Missing $missing (${metrics.installedCount}/4)"
-                                    }
+                            text = if (modelsReady) {
+                                if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) {
+                                    "Generate Offline Image (⚡ Fast LCM)"
+                                } else {
+                                    "Generate Offline Image (🎨 Standard SD)"
                                 }
-                                isTamil -> "முதலில் ONNX Folder ஏற்றவும் (${metrics.installedCount}/4)"
-                                else -> "Upload ONNX Folder First (${metrics.installedCount}/4)"
+                            } else {
+                                metrics.missingSummaryFor(
+                                    engine = preferences.activeEngine,
+                                    requireImg2Img = false,
+                                    isTamil = isTamil
+                                )
                             },
                             color = Color.White,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)

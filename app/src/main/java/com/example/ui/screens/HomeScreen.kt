@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ai.RealDeviceAndModelMetrics
+import com.example.data.ActiveDiffusionEngine
 import com.example.data.AppPreferencesState
 import com.example.ui.ActiveScreen
 import com.example.ui.components.CircularGlowIconButton
@@ -338,6 +339,7 @@ fun HomeScreen(
             // ONNX Runtime & Offline Mode Status Pill
             OnnxStatusPill(
                 metrics = metrics,
+                activeEngine = preferences.activeEngine,
                 offlineMode = preferences.offlineMode,
                 isTamil = isTamil,
                 onClick = onOpenModelsTab
@@ -446,12 +448,13 @@ private fun FramedIconBadge(
 @Composable
 private fun OnnxStatusPill(
     metrics: RealDeviceAndModelMetrics,
+    activeEngine: ActiveDiffusionEngine,
     offlineMode: Boolean,
     isTamil: Boolean,
     onClick: () -> Unit
 ) {
     val pillShape = RoundedCornerShape(50)
-    val onnxReady = metrics.ortRuntimeAvailable && metrics.isTxt2ImgReady
+    val onnxReady = metrics.ortRuntimeAvailable && metrics.isTxt2ImgReadyFor(activeEngine)
     val onnxDotColor = if (onnxReady) {
         NeonReadyGreen
     } else if (metrics.ortRuntimeAvailable) {
@@ -460,16 +463,13 @@ private fun OnnxStatusPill(
         Color(0xFFFF5252)
     }
 
+    val engineTag = if (activeEngine == ActiveDiffusionEngine.FAST_LCM) "⚡ Fast LCM" else "🎨 Standard SD"
     val onnxStatusText = when {
-        onnxReady -> "ONNX Runtime : Ready (${metrics.installedCount}/4)"
-        metrics.incompleteSlots.isNotEmpty() -> {
-            val missing = metrics.incompleteSlots.first().missingCompanionFiles.firstOrNull() ?: "weights.pb"
-            if (isTamil) "ONNX : $missing விடுபட்டுள்ளது (Tap)" else "ONNX : Missing $missing (Tap)"
-        }
+        onnxReady -> "ONNX : $engineTag Ready (${metrics.coreInstalledCount}/8)"
         metrics.ortRuntimeAvailable -> if (isTamil) {
-            "ONNX v${metrics.ortVersion} : மாடல் சேர்க்கவும் (${metrics.installedCount}/4)"
+            "ONNX : மாடல் சேர்க்கவும் (${metrics.coreInstalledCount}/8)"
         } else {
-            "ONNX v${metrics.ortVersion} : Models (${metrics.installedCount}/4)"
+            "ONNX v${metrics.ortVersion} : Slots (${metrics.coreInstalledCount}/8)"
         }
         else -> "ONNX Runtime : Unavailable"
     }

@@ -77,6 +77,14 @@ import com.example.ui.theme.SoftAmberStatus
 import com.example.ui.theme.VibrantPinkPill
 import java.io.File
 
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.UploadFile
+import com.example.ai.DedicatedModelSlot
+import com.example.ai.DedicatedSlotStatus
+import com.example.ai.EngineLinkState
+import com.example.data.ActiveDiffusionEngine
+import com.example.ui.components.ActiveEngineSwitchCard
+
 @Composable
 fun ModelsTabScreen(
     preferences: AppPreferencesState,
@@ -85,14 +93,18 @@ fun ModelsTabScreen(
     importProgressText: String?,
     verificationReport: String?,
     preferredUnetMode: PreferredUnetImportMode = PreferredUnetImportMode.AUTO_FAST_MOBILE,
+    onSelectEngine: (ActiveDiffusionEngine) -> Unit = {},
     onSelectPreferredUnetMode: (PreferredUnetImportMode) -> Unit = {},
     onSwitchUnetFromFolder: (PreferredUnetImportMode) -> Unit = {},
     onOneTouchFolderUpload: () -> Unit,
     onVerifyPipeline: () -> Unit,
-    onSingleSlotUpload: (DiffusionModelSlot) -> Unit,
+    onDedicatedSlotUpload: (DedicatedModelSlot) -> Unit = {},
+    onTokenizerSlotUpload: () -> Unit = {},
+    onDeleteDedicatedSlot: (DedicatedModelSlot) -> Unit = {},
+    onSingleSlotUpload: (DiffusionModelSlot) -> Unit = {},
     onAttachCompanionWeight: (DiffusionModelSlot) -> Unit = {},
     onOpenSettingsDownloads: () -> Unit = {},
-    onDeleteSlot: (DiffusionModelSlot) -> Unit,
+    onDeleteSlot: (DiffusionModelSlot) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isTamil = preferences.isTamil
@@ -121,13 +133,24 @@ fun ModelsTabScreen(
                 style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold)
             )
 
-            // One-Touch Folder Upload + ONNX Verification Card
+            // 1. Top 1-Touch Active Engine Switch (Fast LCM vs Standard SD)
+            ActiveEngineSwitchCard(
+                activeEngine = preferences.activeEngine,
+                metrics = metrics,
+                isTamil = isTamil,
+                darkTheme = darkTheme,
+                enabled = !isImporting,
+                tagPrefix = "models",
+                onSelectEngine = onSelectEngine
+            )
+
+            // 2. Folder Auto-Import (Phone > IG) + Verify + Download Links Card
             FrostedGlassCard(darkTheme = darkTheme) {
                 Text(
                     text = if (isTamil) {
-                        "One-Touch Folder Upload (ஒரே கிளிக்கில் ஏற்றவும்)"
+                        "Folder Auto-Import (Phone > IG ஒரே கிளிக்கில் ஏற்றவும்)"
                     } else {
-                        "One-Touch Folder Upload"
+                        "One-Touch Folder Auto-Import (Phone > IG)"
                     },
                     color = textColor,
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
@@ -135,99 +158,13 @@ fun ModelsTabScreen(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = if (isTamil) {
-                        "ஒரே Folder-ல் சேமித்த Image Generation 4 .onnx மாடல்களையும் + Face Swap 3 .onnx மாடல்களையும் (det_10g, w600k_r50, inswapper_128 / hyperswap) தானாக அடையாளம் கண்டு ஏற்றும்."
+                        "உங்கள் Phone > IG ஃபோல்டரைத் தேர்ந்தெடுத்தால் போதும் — கீழே உள்ள 8 தனித்தனி ஸ்லாட்டுகளையும் (Slot 1A, 1B, 2A, 2B, 3, 4, 5, 6) + Face Swap மாடல்களையும் ஆப் தானாகவே அடையாளம் கண்டு அந்தந்த ஸ்லாட்டில் நிரப்பிவிடும்!"
                     } else {
-                        "Select your folder containing Diffusion .onnx models (text_encoder, unet, vae_decoder, vae_encoder) and/or Face Swap .onnx models (det_10g, w600k_r50, inswapper_128 / hyperswap) to import automatically."
+                        "Select your Phone > IG folder once — the app automatically identifies and populates all 8 dedicated split slots (1A, 1B, 2A, 2B, 3, 4, 5, 6) + optional Face Swap models."
                     },
                     color = subColor,
                     style = MaterialTheme.typography.bodyMedium
                 )
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Dual-UNet Folder Preference Selector (Fast LCM ~860 MB vs Standard SD 3.44 GB)
-                Text(
-                    text = if (isTamil) {
-                        "ஒரே Folder-ல் 2 UNet இருந்தால் எதைத் தேர்வு செய்ய வேண்டும்?"
-                    } else {
-                        "When folder contains both UNets, import:"
-                    },
-                    color = textColor,
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                val preferFastSelected = preferredUnetMode != PreferredUnetImportMode.FORCE_STANDARD_SD
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    val pillShape = RoundedCornerShape(14.dp)
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .weight(1f)
-                            .minimumInteractiveComponentSize()
-                            .clip(pillShape)
-                            .background(
-                                if (preferFastSelected) {
-                                    Brush.horizontalGradient(listOf(PinkGlowStart, PinkGlowEnd))
-                                } else {
-                                    Brush.horizontalGradient(
-                                        listOf(
-                                            Color.White.copy(alpha = if (darkTheme) 0.12f else 0.55f),
-                                            Color.White.copy(alpha = if (darkTheme) 0.08f else 0.45f)
-                                        )
-                                    )
-                                }
-                            )
-                            .border(1.dp, Color.White.copy(alpha = 0.75f), pillShape)
-                            .clickable(enabled = !isImporting) {
-                                onSelectPreferredUnetMode(PreferredUnetImportMode.FORCE_FAST_LCM)
-                            }
-                            .padding(vertical = 8.dp, horizontal = 6.dp)
-                            .testTag("prefer_fast_lcm_unet_button")
-                    ) {
-                        Text(
-                            text = "⚡ Fast LCM (~860 MB)",
-                            color = if (preferFastSelected) Color.White else textColor,
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            maxLines = 1
-                        )
-                    }
-
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .weight(1f)
-                            .minimumInteractiveComponentSize()
-                            .clip(pillShape)
-                            .background(
-                                if (!preferFastSelected) {
-                                    Brush.horizontalGradient(listOf(PurpleActionStart, PurpleActionEnd))
-                                } else {
-                                    Brush.horizontalGradient(
-                                        listOf(
-                                            Color.White.copy(alpha = if (darkTheme) 0.12f else 0.55f),
-                                            Color.White.copy(alpha = if (darkTheme) 0.08f else 0.45f)
-                                        )
-                                    )
-                                }
-                            )
-                            .border(1.dp, Color.White.copy(alpha = 0.75f), pillShape)
-                            .clickable(enabled = !isImporting) {
-                                onSelectPreferredUnetMode(PreferredUnetImportMode.FORCE_STANDARD_SD)
-                            }
-                            .padding(vertical = 8.dp, horizontal = 6.dp)
-                            .testTag("prefer_standard_sd_unet_button")
-                    ) {
-                        Text(
-                            text = "🎨 Standard (3.44 GB)",
-                            color = if (!preferFastSelected) Color.White else textColor,
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            maxLines = 1
-                        )
-                    }
-                }
-
                 Spacer(modifier = Modifier.height(10.dp))
 
                 val btnShape = RoundedCornerShape(22.dp)
@@ -264,79 +201,13 @@ fun ModelsTabScreen(
                         text = if (isImporting) {
                             importProgressText ?: "Importing..."
                         } else if (isTamil) {
-                            "Folder தேர்வு செய்து ஏற்றுக"
+                            "Folder தேர்வு செய்து 8 ஸ்லாட்களையும் நிரப்புக"
                         } else {
-                            "Select Folder & Auto-Import"
+                            "Select Folder & Auto-Fill All Slots"
                         },
                         color = Color.White,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                     )
-                }
-
-                // Active UNet Badge + 1-Tap Switch Warning when Slow 3.44 GB FP32 is currently installed
-                if (metrics.unetVariant != UnetVariant.NONE) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    val isSlowFp32 = metrics.unetVariant == UnetVariant.HEAVY_FP32
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(
-                                if (isSlowFp32) {
-                                    Color(0xFFFFF3E0).copy(alpha = if (darkTheme) 0.18f else 0.92f)
-                                } else {
-                                    Color.White.copy(alpha = if (darkTheme) 0.12f else 0.70f)
-                                }
-                            )
-                            .border(
-                                1.dp,
-                                if (isSlowFp32) Color(0xFFFF9800) else NeonReadyGreen,
-                                RoundedCornerShape(14.dp)
-                            )
-                            .padding(10.dp)
-                    ) {
-                        Text(
-                            text = metrics.activeUnetBadgeLabel(isTamil),
-                            color = if (isSlowFp32 && !darkTheme) Color(0xFFE65100) else textColor,
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold)
-                        )
-                        if (isSlowFp32) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = if (isTamil) {
-                                    "இந்த 3.44 GB மாடல் CPU-வில் மிகவும் மெதுவாக இயங்கும். உங்கள் Folder-ல் உள்ள ~860 MB Fast LCM மாடலுக்கு மாற்ற கீழே அழுத்தவும்:"
-                                } else {
-                                    "This 3.44 GB FP32 UNet takes ~3 min/step on mobile CPU. Tap below to switch to Fast LCM (~860 MB) from your folder:"
-                                },
-                                color = subColor,
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .minimumInteractiveComponentSize()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Brush.horizontalGradient(listOf(PinkGlowStart, VibrantPinkPill)))
-                                    .clickable(enabled = !isImporting) {
-                                        onSwitchUnetFromFolder(PreferredUnetImportMode.FORCE_FAST_LCM)
-                                    }
-                                    .padding(vertical = 8.dp, horizontal = 10.dp)
-                                    .testTag("models_switch_to_fast_lcm_button")
-                            ) {
-                                Text(
-                                    text = if (isTamil) {
-                                        "⚡ வேகமான Fast LCM (~860 MB) மாடலுக்கு மாற்றுக"
-                                    } else {
-                                        "⚡ Switch to Fast LCM (~860 MB) from Folder"
-                                    },
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                                )
-                            }
-                        }
-                    }
                 }
 
                 if (metrics.hasAnySlotFilesOnDisk) {
@@ -420,58 +291,117 @@ fun ModelsTabScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Core AI: ${metrics.installedCount}/4 • Face Swap: ${metrics.faceSwapInstalledCount}/3 • Disk: ${OnnxModelManager.formatBytes(metrics.totalModelBytes)} • Free: ${OnnxModelManager.formatBytes(metrics.deviceFreeBytes)}",
+                    text = "Core Slots: ${metrics.coreInstalledCount}/8 • Face Swap: ${metrics.faceSwapInstalledCount}/3 • Disk: ${OnnxModelManager.formatBytes(metrics.totalModelBytes)} • Free: ${OnnxModelManager.formatBytes(metrics.deviceFreeBytes)}",
                     color = subColor,
                     style = MaterialTheme.typography.labelLarge
                 )
             }
 
-            // Section 1: Core Diffusion Models (4)
-            Text(
-                text = if (isTamil) {
-                    "Image Generation மாடல்கள் (${metrics.installedCount}/4)"
+            // 3A. Fast LCM Engine (Slot 1A & Slot 1B)
+            EngineGroupHeaderRow(
+                title = if (isTamil) {
+                    "⚡ Fast LCM Engine (பரிந்துரைக்கப்படும் வேகமான மாடல்)"
                 } else {
-                    "Core Image Generation Models (${metrics.installedCount}/4)"
+                    "⚡ Fast LCM Engine (Recommended Fast Model)"
                 },
-                color = textColor,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
+                linkState = metrics.fastLcmLink,
+                isTamil = isTamil,
+                textColor = textColor
             )
 
-            metrics.diffusionSlots.forEach { slotStatus ->
-                ModelSlotItemCard(
+            metrics.fastLcmDedicatedSlots.forEach { slotStatus ->
+                DedicatedSlotItemCard(
                     slotStatus = slotStatus,
                     isTamil = isTamil,
                     darkTheme = darkTheme,
+                    isImporting = isImporting,
                     textColor = textColor,
                     subColor = subColor,
-                    onSingleSlotUpload = onSingleSlotUpload,
-                    onAttachCompanionWeight = onAttachCompanionWeight,
-                    onDeleteSlot = onDeleteSlot
+                    onUploadClick = { onDedicatedSlotUpload(slotStatus.slot) },
+                    onDeleteClick = { onDeleteDedicatedSlot(slotStatus.slot) }
                 )
             }
 
-            // Section 2: Face Swap Add-On Models (3)
+            // 3B. Standard SD 1.5 Engine (Slot 2A & Slot 2B)
             Spacer(modifier = Modifier.height(4.dp))
+            EngineGroupHeaderRow(
+                title = if (isTamil) {
+                    "🎨 Standard SD 1.5 Engine (ஹை-குவாலிட்டி மாடல்)"
+                } else {
+                    "🎨 Standard SD 1.5 Engine (High-Quality Model)"
+                },
+                linkState = metrics.standardSdLink,
+                isTamil = isTamil,
+                textColor = textColor
+            )
+
+            metrics.standardSdDedicatedSlots.forEach { slotStatus ->
+                DedicatedSlotItemCard(
+                    slotStatus = slotStatus,
+                    isTamil = isTamil,
+                    darkTheme = darkTheme,
+                    isImporting = isImporting,
+                    textColor = textColor,
+                    subColor = subColor,
+                    onUploadClick = { onDedicatedSlotUpload(slotStatus.slot) },
+                    onDeleteClick = { onDeleteDedicatedSlot(slotStatus.slot) }
+                )
+            }
+
+            // 3C. Other Essential Core Models (Slot 3, Slot 4, Slot 5, Slot 6)
+            Spacer(modifier = Modifier.height(4.dp))
+            val sharedReadyCount = metrics.essentialSharedDedicatedSlots.count { it.isInstalled }
             Text(
                 text = if (isTamil) {
-                    "Face Swap மாடல்கள் (${metrics.faceSwapInstalledCount}/3 • Optional)"
+                    "மற்ற அத்தியாவசிய மாடல்கள் ($sharedReadyCount/4 • Slot 3–6)"
                 } else {
-                    "Face Swap Add-On Models (${metrics.faceSwapInstalledCount}/3 • Optional)"
+                    "Other Essential Core Models ($sharedReadyCount/4 • Slot 3–6)"
                 },
                 color = textColor,
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
             )
 
-            metrics.faceSwapSlots.forEach { slotStatus ->
-                ModelSlotItemCard(
+            metrics.essentialSharedDedicatedSlots.forEach { slotStatus ->
+                DedicatedSlotItemCard(
                     slotStatus = slotStatus,
                     isTamil = isTamil,
                     darkTheme = darkTheme,
+                    isImporting = isImporting,
                     textColor = textColor,
                     subColor = subColor,
-                    onSingleSlotUpload = onSingleSlotUpload,
-                    onAttachCompanionWeight = onAttachCompanionWeight,
-                    onDeleteSlot = onDeleteSlot
+                    onUploadClick = {
+                        if (slotStatus.slot == DedicatedModelSlot.TOKENIZER) {
+                            onTokenizerSlotUpload()
+                        } else {
+                            onDedicatedSlotUpload(slotStatus.slot)
+                        }
+                    },
+                    onDeleteClick = { onDeleteDedicatedSlot(slotStatus.slot) }
+                )
+            }
+
+            // 4. Separate Optional Face Swap Models Section (3)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = if (isTamil) {
+                    "Optional Face Swap மாடல்கள் (${metrics.faceSwapInstalledCount}/3)"
+                } else {
+                    "Optional Face Swap Models (${metrics.faceSwapInstalledCount}/3)"
+                },
+                color = textColor,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
+            )
+
+            metrics.faceSwapDedicatedSlots.forEach { slotStatus ->
+                DedicatedSlotItemCard(
+                    slotStatus = slotStatus,
+                    isTamil = isTamil,
+                    darkTheme = darkTheme,
+                    isImporting = isImporting,
+                    textColor = textColor,
+                    subColor = subColor,
+                    onUploadClick = { onDedicatedSlotUpload(slotStatus.slot) },
+                    onDeleteClick = { onDeleteDedicatedSlot(slotStatus.slot) }
                 )
             }
 
@@ -481,152 +411,185 @@ fun ModelsTabScreen(
 }
 
 @Composable
-private fun ModelSlotItemCard(
-    slotStatus: ModelSlotStatus,
+private fun EngineGroupHeaderRow(
+    title: String,
+    linkState: EngineLinkState,
+    isTamil: Boolean,
+    textColor: Color
+) {
+    val partsUploaded = (if (linkState.isGraphInstalled) 1 else 0) + (if (linkState.isWeightsInstalled) 1 else 0)
+    val badgeText = when {
+        linkState.isPairLinked -> if (isTamil) "🔗 இணைக்கப்பட்டது (2/2)" else "🔗 Linked (2/2)"
+        partsUploaded == 1 -> if (isTamil) "⚠️ பாதி (1/2)" else "⚠️ Partial (1/2)"
+        else -> "0/2"
+    }
+    val badgeColor = when {
+        linkState.isPairLinked -> NeonReadyGreen
+        partsUploaded == 1 -> Color(0xFFFF9800)
+        else -> SoftAmberStatus
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            text = title,
+            color = textColor,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = badgeText,
+            color = badgeColor,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold)
+        )
+    }
+}
+
+@Composable
+private fun DedicatedSlotItemCard(
+    slotStatus: DedicatedSlotStatus,
     isTamil: Boolean,
     darkTheme: Boolean,
+    isImporting: Boolean,
     textColor: Color,
     subColor: Color,
-    onSingleSlotUpload: (DiffusionModelSlot) -> Unit,
-    onAttachCompanionWeight: (DiffusionModelSlot) -> Unit,
-    onDeleteSlot: (DiffusionModelSlot) -> Unit
+    onUploadClick: () -> Unit,
+    onDeleteClick: () -> Unit
 ) {
     val slot = slotStatus.slot
-    val isIncomplete = slotStatus.isIncompleteExternalGraph
-    val displayFileName = if ((slotStatus.isInstalled || isIncomplete) && slotStatus.sourceFileLabel.isNotBlank()) {
-        slotStatus.sourceFileLabel
+    val statusLine = if (isTamil) slotStatus.statusDetailTa else slotStatus.statusDetailEn
+    val showDelete = if (slot == DedicatedModelSlot.TOKENIZER) {
+        slotStatus.sizeBytes > 0L
     } else {
-        slot.canonicalFileName
+        slotStatus.isInstalled || slotStatus.isPartial || slotStatus.sizeBytes > 0L
     }
 
     FrostedGlassCard(darkTheme = darkTheme) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(
                     imageVector = when {
+                        slotStatus.isLinkedWithPair -> Icons.Filled.Link
                         slotStatus.isInstalled -> Icons.Filled.CheckCircle
-                        isIncomplete -> Icons.Filled.WarningAmber
+                        slotStatus.isPartial -> Icons.Filled.WarningAmber
                         else -> Icons.Filled.CloudDownload
                     },
                     contentDescription = null,
                     tint = when {
                         slotStatus.isInstalled -> NeonReadyGreen
-                        isIncomplete -> Color(0xFFFF6D00)
+                        slotStatus.isPartial -> Color(0xFFFF6D00)
                         else -> SoftAmberStatus
                     },
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .size(23.dp)
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = if (isTamil) slot.titleTa else slot.titleEn,
                         color = textColor,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold)
                     )
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = when {
-                            slotStatus.isInstalled ->
-                                "$displayFileName • ${OnnxModelManager.formatBytes(slotStatus.totalBytes)}"
-                            isIncomplete -> if (isTamil) {
-                                "$displayFileName (${OnnxModelManager.formatBytes(slotStatus.sizeBytes)}) • ⚠️ ${slotStatus.missingCompanionFiles.joinToString()} விடுபட்டுள்ளது"
-                            } else {
-                                "$displayFileName (${OnnxModelManager.formatBytes(slotStatus.sizeBytes)}) • ⚠️ Missing ${slotStatus.missingCompanionFiles.joinToString()}"
-                            }
-                            isTamil -> "$displayFileName • இன்னும் சேர்க்கப்படவில்லை"
-                            else -> "$displayFileName • Not uploaded yet"
+                        text = statusLine,
+                        color = if (slotStatus.isInstalled) {
+                            if (darkTheme) NeonReadyGreen else Color(0xFF1B5E20)
+                        } else if (slotStatus.isPartial) {
+                            Color(0xFFE65100)
+                        } else {
+                            subColor
                         },
-                        color = if (isIncomplete) Color(0xFFE65100) else subColor,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontWeight = if (isIncomplete) FontWeight.Bold else FontWeight.Normal
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontWeight = if (slotStatus.isInstalled || slotStatus.isPartial) FontWeight.Bold else FontWeight.Normal
                         )
                     )
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = if (isTamil) slot.descriptionTa else slot.descriptionEn,
                         color = subColor.copy(alpha = 0.85f),
                         style = MaterialTheme.typography.labelSmall
                     )
-                    if (slot == DiffusionModelSlot.UNET && slotStatus.isInstalled) {
-                        val variant = OnnxModelManager.classifyUnetVariant(
-                            slotStatus.sourceFileLabel,
-                            slotStatus.totalBytes
-                        )
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Text(
-                            text = when (variant) {
-                                UnetVariant.FAST_LCM_INT8 ->
-                                    if (isTamil) "✓ Active: ⚡ வேகமான Fast LCM INT8 (4–8 Steps)" else "✓ Active: ⚡ Fast LCM INT8 (4–8 Steps)"
-                                UnetVariant.COMPACT_FP16 ->
-                                    "✓ Active: ⚡ Compact FP16 UNet"
-                                UnetVariant.HEAVY_FP32 ->
-                                    if (isTamil) "⚠️ Active: 🐢 மெதுவான 3.44 GB FP32 (Fast LCM மாற்ற பரிந்துரை)" else "⚠️ Active: 🐢 Slow 3.44 GB FP32"
-                                UnetVariant.NONE -> ""
-                            },
-                            color = if (variant == UnetVariant.HEAVY_FP32) Color(0xFFE65100) else NeonReadyGreen,
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
-                        )
-                    }
-                }
-
-                IconButton(
-                    onClick = { onSingleSlotUpload(slot) },
-                    modifier = Modifier.testTag("upload_slot_${slot.folderHint}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.FileOpen,
-                        contentDescription = "Select ${slot.canonicalFileName}",
-                        tint = PurpleActionEnd
-                    )
-                }
-
-                if (slotStatus.isInstalled || slotStatus.hasGraphFile) {
-                    IconButton(
-                        onClick = { onDeleteSlot(slot) },
-                        modifier = Modifier.testTag("delete_slot_${slot.folderHint}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.DeleteOutline,
-                            contentDescription = "Delete ${slot.canonicalFileName}",
-                            tint = Color(0xFFE53935)
-                        )
-                    }
                 }
             }
 
-            if (isIncomplete) {
-                val missingName = slotStatus.missingCompanionFiles.firstOrNull() ?: "weights.pb"
-                Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                val uploadBtnShape = RoundedCornerShape(14.dp)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center,
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .weight(1f)
                         .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Brush.horizontalGradient(listOf(PinkGlowStart, VibrantPinkPill)))
-                        .border(1.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(14.dp))
-                        .clickable { onAttachCompanionWeight(slot) }
-                        .padding(vertical = 8.dp, horizontal = 12.dp)
-                        .testTag("attach_companion_${slot.folderHint}")
+                        .clip(uploadBtnShape)
+                        .background(
+                            Brush.horizontalGradient(
+                                if (slotStatus.isInstalled && (slot != DedicatedModelSlot.TOKENIZER || slotStatus.sizeBytes > 0L)) {
+                                    listOf(PurpleActionStart, PurpleActionEnd)
+                                } else {
+                                    listOf(PinkGlowStart, VibrantPinkPill)
+                                }
+                            )
+                        )
+                        .border(1.dp, Color.White.copy(alpha = 0.85f), uploadBtnShape)
+                        .clickable(enabled = !isImporting, onClick = onUploadClick)
+                        .padding(vertical = 9.dp, horizontal = 12.dp)
+                        .testTag("upload_slot_${slot.slotTag}")
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.FileOpen,
-                        contentDescription = null,
+                        imageVector = Icons.Filled.UploadFile,
+                        contentDescription = "Upload ${slot.titleEn}",
                         tint = Color.White,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (isTamil) {
-                            "+ $missingName எடை ஃபைலை இணைக்கவும் (Attach)"
-                        } else {
-                            "+ Attach $missingName External Weights File"
+                        text = when {
+                            slot == DedicatedModelSlot.TOKENIZER && slotStatus.sizeBytes == 0L ->
+                                if (isTamil) "Upload vocab.json & merges.txt" else "Upload vocab.json & merges.txt"
+                            slotStatus.isInstalled ->
+                                if (isTamil) "மாற்று (Replace File)" else "Replace File"
+                            else ->
+                                if (isTamil) "Upload (${slot.expectedFileHint.substringBefore(" (")})"
+                                else "Upload File"
                         },
                         color = Color.White,
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
+                }
+
+                if (showDelete) {
+                    IconButton(
+                        onClick = onDeleteClick,
+                        enabled = !isImporting,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.White.copy(alpha = if (darkTheme) 0.12f else 0.65f))
+                            .border(1.dp, Color(0xFFE53935).copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                            .testTag("delete_slot_${slot.slotTag}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.DeleteOutline,
+                            contentDescription = "Delete ${slot.titleEn}",
+                            tint = Color(0xFFE53935)
+                        )
+                    }
                 }
             }
         }

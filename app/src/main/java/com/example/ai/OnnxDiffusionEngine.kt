@@ -8,6 +8,7 @@ import ai.onnxruntime.TensorInfo
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import com.example.data.ActiveDiffusionEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -112,20 +113,19 @@ class OnnxDiffusionEngine(
 
         var verifiedCount = 0
         var incompleteCount = 0
-        for (slot in DiffusionModelSlot.entries) {
-            currentCoroutineContext().ensureActive()
-            val file = modelManager.resolveExistingSlotFile(slot)
-            if (file == null) {
-                lines.add("• ${slot.canonicalFileName}: Not uploaded yet")
-                continue
+
+        fun verifyOnnxTarget(label: String, file: File?) {
+            if (file == null || !file.exists()) {
+                lines.add("• $label: Not uploaded yet")
+                return
             }
             val missingCompanions = OnnxModelManager.findMissingCompanionFiles(file)
             if (missingCompanions.isNotEmpty()) {
                 lines.add(
-                    "⚠️ ${slot.canonicalFileName} (${OnnxModelManager.formatBytes(file.length())}) -> Incomplete: missing ${missingCompanions.joinToString()} (See Settings → ONNX Model Download Links)"
+                    "⚠️ $label (${OnnxModelManager.formatBytes(file.length())}) -> Incomplete: missing ${missingCompanions.joinToString()}"
                 )
                 incompleteCount++
-                continue
+                return
             }
             val t0 = System.currentTimeMillis()
             var repairTag = ""
@@ -136,12 +136,39 @@ class OnnxDiffusionEngine(
                     val ti = node.info as? TensorInfo
                     "$name:${ti?.type ?: "?"}${ti?.shape?.contentToString() ?: ""}"
                 }
-                lines.add("✅ ${slot.canonicalFileName}$repairTag (${dt}ms) -> $inputsDesc")
+                lines.add("✅ $label$repairTag (${dt}ms) -> $inputsDesc")
                 verifiedCount++
             }
         }
+
+        currentCoroutineContext().ensureActive()
+        verifyOnnxTarget("Slot 1A+1B Fast LCM UNet", modelManager.resolveEngineUnetFile(ActiveDiffusionEngine.FAST_LCM))
+        currentCoroutineContext().ensureActive()
+        verifyOnnxTarget("Slot 2A+2B Standard SD UNet", modelManager.resolveEngineUnetFile(ActiveDiffusionEngine.STANDARD_SD))
+        currentCoroutineContext().ensureActive()
+        verifyOnnxTarget("Slot 3 Text Encoder (CLIP)", modelManager.resolveExistingSlotFile(DiffusionModelSlot.TEXT_ENCODER))
+        currentCoroutineContext().ensureActive()
+        verifyOnnxTarget("Slot 4 VAE Decoder", modelManager.resolveExistingSlotFile(DiffusionModelSlot.VAE_DECODER))
+        currentCoroutineContext().ensureActive()
+        verifyOnnxTarget("Slot 5 VAE Encoder", modelManager.resolveExistingSlotFile(DiffusionModelSlot.VAE_ENCODER))
+
+        val tokDir = modelManager.dedicatedFolder(DedicatedModelSlot.TOKENIZER)
+        val hasCustomTok = File(tokDir, "vocab.json").exists() && File(tokDir, "merges.txt").exists()
+        val tokIds = tokenizer.encode("photorealistic portrait")
+        lines.add(
+            "✅ Slot 6 Tokenizer -> ${if (hasCustomTok) "Custom vocab.json & merges.txt" else "Built-in CLIP vocab.json & merges.txt"} (${tokIds.size} tokens)"
+        )
+
+        for (slot in listOf(DiffusionModelSlot.FACE_DETECTOR, DiffusionModelSlot.FACE_RECOGNIZER, DiffusionModelSlot.FACE_SWAPPER)) {
+            currentCoroutineContext().ensureActive()
+            val f = modelManager.resolveExistingSlotFile(slot)
+            if (f != null) {
+                verifyOnnxTarget(slot.canonicalFileName, f)
+            }
+        }
+
         if (verifiedCount == 0 && incompleteCount == 0) {
-            error("No .onnx files installed yet. Open Models tab and use One-Touch Folder Upload.")
+            error("No .onnx files installed yet. Open Models tab to upload individual slots or select your IG folder.")
         }
         lines.joinToString("\n")
     }
@@ -161,6 +188,7 @@ class OnnxDiffusionEngine(
         steps: Int,
         guidanceScale: Float,
         seed: Long,
+        activeEngine: ActiveDiffusionEngine = ActiveDiffusionEngine.FAST_LCM,
         onProgress: (GenerationProgress) -> Unit
     ): Result<TextToImageResult> = runCatching {
         currentCoroutineContext().ensureActive()
@@ -178,10 +206,10 @@ class OnnxDiffusionEngine(
             error(safetyCheck.messageEn ?: "Prompt blocked by safety check.")
         }
 
-        // 2. Verify required 3 Text-to-Image ONNX models & any external weights exist
-        val textEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.TEXT_ENCODER)
-        val unetFile = requireCompleteSlotFile(DiffusionModelSlot.UNET)
-        val vaeDecoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_DECODER)
+        // 2. Verify required Text-to-Image ONNX models & selected Active Engine pair (1A+1B or 2A+2B)
+        val textEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.TEXT_ENCODER, "Slot 3 (Text Encoder CLIP)")
+        val unetFile = requireCompleteActiveEngineFile(activeEngine)
+        val vaeDecoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_DECODER, "Slot 4 (VAE Decoder)")
 
         val (width, height) = parseResolution(resolutionLabel)
         val latentW = width / 8
@@ -459,6 +487,7 @@ class OnnxDiffusionEngine(
         steps: Int,
         guidanceScale: Float,
         seed: Long,
+        activeEngine: ActiveDiffusionEngine = ActiveDiffusionEngine.FAST_LCM,
         onProgress: (GenerationProgress) -> Unit
     ): Result<ImageToImageResult> = runCatching {
         currentCoroutineContext().ensureActive()
@@ -476,11 +505,11 @@ class OnnxDiffusionEngine(
             error(safetyCheck.messageEn ?: "Please adjust your prompt and try again.")
         }
 
-        // 2. Verify all 4 ONNX models & external weights exist (including vae_encoder.onnx)
-        val vaeEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_ENCODER)
-        val textEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.TEXT_ENCODER)
-        val unetFile = requireCompleteSlotFile(DiffusionModelSlot.UNET)
-        val vaeDecoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_DECODER)
+        // 2. Verify all required ONNX models & selected Active Engine pair (including Slot 5 VAE Encoder)
+        val vaeEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_ENCODER, "Slot 5 (VAE Encoder)")
+        val textEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.TEXT_ENCODER, "Slot 3 (Text Encoder CLIP)")
+        val unetFile = requireCompleteActiveEngineFile(activeEngine)
+        val vaeDecoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_DECODER, "Slot 4 (VAE Decoder)")
 
         val (width, height) = parseResolution(resolutionLabel)
         val latentW = width / 8
@@ -858,13 +887,53 @@ class OnnxDiffusionEngine(
         )
     }
 
-    private fun requireCompleteSlotFile(slot: DiffusionModelSlot): File {
+    private fun requireCompleteActiveEngineFile(activeEngine: ActiveDiffusionEngine): File {
+        val engineDir = modelManager.engineFolder(activeEngine)
+        val linkState = OnnxModelManager.linkEnginePairFiles(engineDir)
+        val otherEngine = if (activeEngine == ActiveDiffusionEngine.FAST_LCM) {
+            ActiveDiffusionEngine.STANDARD_SD
+        } else {
+            ActiveDiffusionEngine.FAST_LCM
+        }
+        val otherReady = OnnxModelManager.linkEnginePairFiles(modelManager.engineFolder(otherEngine)).isPairLinked
+        val switchHint = if (otherReady) {
+            val otherTitle = if (otherEngine == ActiveDiffusionEngine.FAST_LCM) "⚡ Fast LCM" else "🎨 Standard SD"
+            " (அல்லது மேலே உள்ள சுவிட்சில் $otherTitle தேர்வு செய்யவும் / Or switch to $otherTitle at the top!)"
+        } else {
+            ""
+        }
+
+        val file = modelManager.resolveEngineUnetFile(activeEngine)
+        if (file == null || !linkState.isGraphInstalled) {
+            val slotGraphLabel = if (activeEngine == ActiveDiffusionEngine.FAST_LCM) {
+                "Slot 1A (Fast LCM model.onnx)"
+            } else {
+                "Slot 2A (Standard SD model.onnx)"
+            }
+            error("Missing $slotGraphLabel. Please upload it in the Models tab.$switchHint")
+        }
+
+        val missingCompanions = OnnxModelManager.findMissingCompanionFiles(file)
+        if (missingCompanions.isNotEmpty() || !linkState.isPairLinked) {
+            val slotWeightLabel = if (activeEngine == ActiveDiffusionEngine.FAST_LCM) {
+                "Slot 1B (${missingCompanions.firstOrNull() ?: "model_int8.onnx.data"})"
+            } else {
+                "Slot 2B (${missingCompanions.firstOrNull() ?: "weights.pb"})"
+            }
+            error(
+                "Missing $slotWeightLabel for ${if (activeEngine == ActiveDiffusionEngine.FAST_LCM) "Fast LCM" else "Standard SD"}. Please upload $slotWeightLabel in the Models tab.$switchHint"
+            )
+        }
+        return file
+    }
+
+    private fun requireCompleteSlotFile(slot: DiffusionModelSlot, slotDisplayLabel: String = slot.canonicalFileName): File {
         val file = modelManager.resolveExistingSlotFile(slot)
-            ?: error("Missing ${slot.canonicalFileName}. Please upload your ONNX folder in the Models tab.")
+            ?: error("Missing $slotDisplayLabel. Please upload it in the Models tab.")
         val missingCompanions = OnnxModelManager.findMissingCompanionFiles(file)
         if (missingCompanions.isNotEmpty()) {
             error(
-                "${slot.canonicalFileName} (${OnnxModelManager.formatBytes(file.length())}) is incomplete — missing external weights: ${missingCompanions.joinToString()}. Download the complete ONNX model pair from Settings → ONNX Model Download Links, or attach ${missingCompanions.first()} in the Models tab."
+                "$slotDisplayLabel (${OnnxModelManager.formatBytes(file.length())}) is incomplete — missing external weights: ${missingCompanions.joinToString()}."
             )
         }
         return file

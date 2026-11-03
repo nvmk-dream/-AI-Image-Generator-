@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ai.DedicatedModelSlot
 import com.example.ai.DiffusionModelSlot
 import com.example.ai.GenerationProgress
 import com.example.ai.ImageEditorAdjustments
@@ -15,6 +16,7 @@ import com.example.ai.PreferredUnetImportMode
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.ai.SamplerType
 import com.example.ai.UnetVariant
+import com.example.data.ActiveDiffusionEngine
 import com.example.data.AppLanguage
 import com.example.data.AppPreferencesRepository
 import com.example.data.AppPreferencesState
@@ -292,6 +294,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setNotificationsEnabled(enabled: Boolean) = viewModelScope.launch { prefsRepo.setNotificationsEnabled(enabled) }
     fun setContentFilterEnabled(enabled: Boolean) = viewModelScope.launch { prefsRepo.setContentFilterEnabled(enabled) }
 
+    fun setActiveEngine(engine: ActiveDiffusionEngine) {
+        viewModelScope.launch {
+            prefsRepo.setActiveEngine(engine)
+            val refreshed = withContext(Dispatchers.IO) {
+                modelManager.unloadSessionsFromRam()
+                modelManager.inspectCurrentMetrics()
+            }
+            val isTamil = uiState.value.preferences.isTamil
+            val toast = when (engine) {
+                ActiveDiffusionEngine.FAST_LCM ->
+                    if (isTamil) "⚡ Fast LCM மாடல் தேர்வு செய்யப்பட்டது" else "⚡ Fast LCM Engine active"
+                ActiveDiffusionEngine.STANDARD_SD ->
+                    if (isTamil) "🎨 Standard SD மாடல் தேர்வு செய்யப்பட்டது" else "🎨 Standard SD Engine active"
+            }
+            transientState.update {
+                it.copy(
+                    metrics = refreshed,
+                    generationErrorMessage = null,
+                    statusToastMessage = toast
+                )
+            }
+        }
+    }
+
     // Phase 3: Verify ONNX Runtime Sessions
     fun verifyOnnxPipeline() {
         viewModelScope.launch {
@@ -335,6 +361,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     generationProgress = GenerationProgress("Preparing Offline ONNX Pipeline...", 0, steps, 2, 0L)
                 )
             }
+            val activeEngine = stateSnapshot.preferences.activeEngine
+            val effectiveSampler = if (activeEngine == ActiveDiffusionEngine.STANDARD_SD && sampler == SamplerType.LCM_FAST) {
+                SamplerType.EULER_STANDARD
+            } else {
+                sampler
+            }
             val result = withContext(Dispatchers.Default) {
                 diffusionEngine.generateTextToImage(
                     userPrompt = userPrompt,
@@ -342,10 +374,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     negativePrompt = negativePrompt,
                     resolutionLabel = stateSnapshot.preferences.resolution,
                     inferenceMode = stateSnapshot.preferences.inferenceMode,
-                    samplerType = sampler,
+                    samplerType = effectiveSampler,
                     steps = steps,
                     guidanceScale = guidanceScale,
                     seed = seed,
+                    activeEngine = activeEngine,
                     onProgress = { prog -> transientState.update { s -> s.copy(generationProgress = prog) } }
                 )
             }
@@ -427,6 +460,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     generationProgress = GenerationProgress("Preparing Offline Image-to-Image...", 0, steps, 2, 0L)
                 )
             }
+            val activeEngine = stateSnapshot.preferences.activeEngine
+            val effectiveSampler = if (activeEngine == ActiveDiffusionEngine.STANDARD_SD && sampler == SamplerType.LCM_FAST) {
+                SamplerType.EULER_STANDARD
+            } else {
+                sampler
+            }
             val result = withContext(Dispatchers.Default) {
                 diffusionEngine.generateImageToImage(
                     sourceImageUri = sourceUri,
@@ -436,10 +475,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     strength = strength,
                     resolutionLabel = stateSnapshot.preferences.resolution,
                     inferenceMode = stateSnapshot.preferences.inferenceMode,
-                    samplerType = sampler,
+                    samplerType = effectiveSampler,
                     steps = steps,
                     guidanceScale = guidanceScale,
                     seed = seed,
+                    activeEngine = activeEngine,
                     onProgress = { prog -> transientState.update { s -> s.copy(generationProgress = prog) } }
                 )
             }
@@ -539,6 +579,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
+            val activeEngine = stateSnapshot.preferences.activeEngine
             val refPath = character.referencePhotoPath
             if (useReferenceImg2Img && !refPath.isNullOrBlank() && File(refPath).exists()) {
                 val res = withContext(Dispatchers.Default) {
@@ -554,6 +595,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         steps = steps,
                         guidanceScale = guidanceScale,
                         seed = character.fixedSeed,
+                        activeEngine = activeEngine,
                         onProgress = { prog -> transientState.update { s -> s.copy(generationProgress = prog) } }
                     )
                 }
@@ -598,6 +640,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         steps = steps,
                         guidanceScale = guidanceScale,
                         seed = character.fixedSeed,
+                        activeEngine = activeEngine,
                         onProgress = { prog -> transientState.update { s -> s.copy(generationProgress = prog) } }
                     )
                 }
@@ -925,31 +968,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val isTamil = uiState.value.preferences.isTamil
             result.fold(
                 onSuccess = { importRes ->
-                    val imported = importRes.importedSlots
-                    val incompleteWarning = updatedMetrics.incompleteSlots.firstOrNull()?.let { inc ->
-                        " ⚠️ ${inc.slot.canonicalFileName} is missing ${inc.missingCompanionFiles.joinToString()} (See Settings → ONNX Model Download Links)."
-                    }.orEmpty()
-                    val unetNote = when {
-                        importRes.dualUnetDetected && importRes.selectedUnetVariant == UnetVariant.FAST_LCM_INT8 ->
-                            if (isTamil) {
-                                " ⚡ Folder-ல் 2 UNet இருந்ததால் வேகமான Fast LCM (${importRes.selectedUnetLabel}) தேர்வு செய்யப்பட்டது!"
-                            } else {
-                                " ⚡ Auto-selected Fast LCM (${importRes.selectedUnetLabel}) from 2 UNets in folder!"
-                            }
-                        importRes.selectedUnetLabel.isNotBlank() ->
-                            " [UNet: ${importRes.selectedUnetLabel}]"
+                    val dedCount = importRes.importedDedicatedSlots.size
+                    if (importRes.fastLcmReady) {
+                        prefsRepo.setActiveEngine(ActiveDiffusionEngine.FAST_LCM)
+                    } else if (importRes.standardSdReady) {
+                        prefsRepo.setActiveEngine(ActiveDiffusionEngine.STANDARD_SD)
+                    }
+                    val engineNote = when {
+                        importRes.fastLcmReady && importRes.standardSdReady ->
+                            if (isTamil) " ⚡ Fast LCM & 🎨 Standard SD இரண்டும் தயார்!"
+                            else " ⚡ Fast LCM & 🎨 Standard SD both linked & ready!"
+                        importRes.fastLcmReady ->
+                            if (isTamil) " ⚡ Fast LCM இணைக்கப்பட்டது!" else " ⚡ Fast LCM linked & ready!"
+                        importRes.standardSdReady ->
+                            if (isTamil) " 🎨 Standard SD இணைக்கப்பட்டது!" else " 🎨 Standard SD linked & ready!"
                         else -> ""
                     }
-                    val msg = if (imported.isNotEmpty()) {
+                    val spaceNote = if (importRes.skippedLowSpaceNote.isNotBlank()) {
+                        " (${importRes.skippedLowSpaceNote})"
+                    } else ""
+                    val msg = if (dedCount > 0) {
                         if (isTamil) {
-                            "✅ ${imported.size} ONNX மாடல்கள் தயார்!$unetNote$incompleteWarning"
+                            "✅ $dedCount ஸ்லாட்டுகள் வெற்றிகரமாக நிரப்பப்பட்டன!$engineNote$spaceNote"
                         } else {
-                            "Imported ${imported.size} complete ONNX model(s).$unetNote$incompleteWarning"
+                            "✅ Auto-filled $dedCount dedicated slot(s)!$engineNote$spaceNote"
                         }
-                    } else if (incompleteWarning.isNotEmpty()) {
-                        incompleteWarning.trim()
                     } else {
-                        "No matching .onnx files found in that folder."
+                        if (isTamil) "அந்த Folder-ல் ONNX மாடல் ஃபைல்கள் எதுவும் இல்லை."
+                        else "No matching ONNX or Tokenizer files found in that folder."
                     }
                     transientState.update {
                         it.copy(
@@ -975,6 +1021,124 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun importDedicatedSlot(uri: Uri, slot: DedicatedModelSlot, originalNameHint: String? = null) {
+        viewModelScope.launch {
+            val label = originalNameHint?.takeIf { it.isNotBlank() } ?: slot.expectedFileHint
+            transientState.update {
+                it.copy(
+                    isImportingModels = true,
+                    importProgressText = "Uploading $label...",
+                    onnxVerificationReport = null
+                )
+            }
+            val result = withContext(Dispatchers.IO) {
+                modelManager.importDedicatedSlotFromUri(uri, slot, originalNameHint) { prog ->
+                    transientState.update { s -> s.copy(importProgressText = prog) }
+                }
+            }
+            val updatedMetrics = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
+            val isTamil = uiState.value.preferences.isTamil
+            result.fold(
+                onSuccess = { (savedSlot, bytes) ->
+                    if (savedSlot == DedicatedModelSlot.FAST_LCM_GRAPH || savedSlot == DedicatedModelSlot.FAST_LCM_WEIGHTS) {
+                        if (updatedMetrics.isFastLcmEngineReady) {
+                            prefsRepo.setActiveEngine(ActiveDiffusionEngine.FAST_LCM)
+                        }
+                    } else if (savedSlot == DedicatedModelSlot.STANDARD_SD_GRAPH || savedSlot == DedicatedModelSlot.STANDARD_SD_WEIGHTS) {
+                        if (updatedMetrics.isStandardSdEngineReady && !updatedMetrics.isFastLcmEngineReady) {
+                            prefsRepo.setActiveEngine(ActiveDiffusionEngine.STANDARD_SD)
+                        }
+                    }
+                    val slotStatus = updatedMetrics.dedicatedSlots.firstOrNull { it.slot == savedSlot }
+                    val detail = if (isTamil) slotStatus?.statusDetailTa else slotStatus?.statusDetailEn
+                    val msg = detail?.takeIf { it.isNotBlank() }
+                        ?: "✅ ${savedSlot.name} (${OnnxModelManager.formatBytes(bytes)}) ready!"
+                    transientState.update {
+                        it.copy(
+                            metrics = updatedMetrics,
+                            isImportingModels = false,
+                            importProgressText = null,
+                            statusToastMessage = msg
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    transientState.update {
+                        it.copy(
+                            metrics = updatedMetrics,
+                            isImportingModels = false,
+                            importProgressText = null,
+                            statusToastMessage = "Upload error: ${err.message}"
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun importTokenizerFiles(uris: List<Uri>, nameHints: List<String?>) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            transientState.update {
+                it.copy(
+                    isImportingModels = true,
+                    importProgressText = "Uploading Tokenizer (vocab.json & merges.txt)...",
+                    onnxVerificationReport = null
+                )
+            }
+            val result = withContext(Dispatchers.IO) {
+                modelManager.importTokenizerUris(uris, nameHints) { prog ->
+                    transientState.update { s -> s.copy(importProgressText = prog) }
+                }
+            }
+            val updatedMetrics = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
+            val isTamil = uiState.value.preferences.isTamil
+            result.fold(
+                onSuccess = {
+                    val slotStatus = updatedMetrics.dedicatedSlots.firstOrNull { it.slot == DedicatedModelSlot.TOKENIZER }
+                    val msg = if (isTamil) {
+                        slotStatus?.statusDetailTa ?: "✅ Slot 6 Tokenizer ஏற்றப்பட்டது!"
+                    } else {
+                        slotStatus?.statusDetailEn ?: "✅ Slot 6 Tokenizer uploaded!"
+                    }
+                    transientState.update {
+                        it.copy(
+                            metrics = updatedMetrics,
+                            isImportingModels = false,
+                            importProgressText = null,
+                            statusToastMessage = msg
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    transientState.update {
+                        it.copy(
+                            metrics = updatedMetrics,
+                            isImportingModels = false,
+                            importProgressText = null,
+                            statusToastMessage = "Tokenizer upload error: ${err.message}"
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun deleteDedicatedSlot(slot: DedicatedModelSlot) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { modelManager.deleteDedicatedSlot(slot) }
+            val updated = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
+            val isTamil = uiState.value.preferences.isTamil
+            transientState.update {
+                it.copy(
+                    metrics = updated,
+                    onnxVerificationReport = null,
+                    statusToastMessage = if (isTamil) "${slot.titleTa} நீக்கப்பட்டது" else "Removed ${slot.titleEn}"
+                )
+            }
+        }
+    }
+
     fun importSingleSlot(uri: Uri, slot: DiffusionModelSlot, originalNameHint: String? = null) {
         viewModelScope.launch {
             transientState.update {
@@ -991,18 +1155,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val updatedMetrics = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
             result.fold(
                 onSuccess = { bytes ->
-                    val slotState = updatedMetrics.slots.firstOrNull { it.slot == slot }
-                    val msg = if (slotState != null && slotState.isIncompleteExternalGraph) {
-                        "Saved ${originalNameHint ?: slot.canonicalFileName} (${OnnxModelManager.formatBytes(bytes)}) — now attach ${slotState.missingCompanionFiles.joinToString()}!"
-                    } else {
-                        "${originalNameHint ?: slot.canonicalFileName} ready (${OnnxModelManager.formatBytes(bytes)})"
-                    }
                     transientState.update {
                         it.copy(
                             metrics = updatedMetrics,
                             isImportingModels = false,
                             importProgressText = null,
-                            statusToastMessage = msg
+                            statusToastMessage = "${originalNameHint ?: slot.canonicalFileName} ready (${OnnxModelManager.formatBytes(bytes)})"
                         )
                     }
                 },
@@ -1042,7 +1200,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             isImportingModels = false,
                             importProgressText = null,
                             onnxVerificationReport = null,
-                            statusToastMessage = "$savedName attached (${OnnxModelManager.formatBytes(bytes)}) — ${slot.canonicalFileName} Ready!"
+                            statusToastMessage = "$savedName attached (${OnnxModelManager.formatBytes(bytes)})!"
                         )
                     }
                 },

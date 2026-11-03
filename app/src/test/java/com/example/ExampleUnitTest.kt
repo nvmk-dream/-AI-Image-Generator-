@@ -461,6 +461,175 @@ class ExampleUnitTest {
         assertTrue(allLinks.any { it.url.contains("TheyCallMeHex/LCM-Dreamshaper-V7-ONNX") })
         assertTrue(allLinks.any { it.url.endsWith("/unet/model_int8.onnx.data") })
     }
+
+    private fun writeSyntheticExternalGraph(file: java.io.File, expectedLocation: String) {
+        val locBytes = expectedLocation.toByteArray(Charsets.UTF_8)
+        val header = byteArrayOf(
+            0x0A, 0x08,
+            'l'.code.toByte(), 'o'.code.toByte(), 'c'.code.toByte(), 'a'.code.toByte(),
+            't'.code.toByte(), 'i'.code.toByte(), 'o'.code.toByte(), 'n'.code.toByte(),
+            0x12, locBytes.size.toByte()
+        ) + locBytes
+        val padded = ByteArray(2048)
+        System.arraycopy(header, 0, padded, 16, header.size)
+        file.writeBytes(padded)
+    }
+
+    @Test
+    fun dedicatedSplitSlots_linkEnginePairFiles_linksInEitherOrderAndFixesWightsTypo() {
+        val tempRoot = java.nio.file.Files.createTempDirectory("split_slots_link_test").toFile()
+        try {
+            // 1. Fast LCM: Upload Slot 1B (weights) FIRST with browser duplicate name, then Slot 1A (graph) SECOND
+            val fastDir = java.io.File(tempRoot, "unet_fast_lcm").apply { mkdirs() }
+            val uploaded1B = java.io.File(fastDir, "model_int8.onnx (1).data")
+            uploaded1B.writeBytes(ByteArray(70_000))
+            java.io.File(fastDir, "weights_source.meta").writeText("model_int8.onnx (1).data")
+
+            val partialFast = com.example.ai.OnnxModelManager.linkEnginePairFiles(fastDir)
+            assertFalse(partialFast.isGraphInstalled)
+            assertTrue(partialFast.isWeightsInstalled)
+            assertFalse(partialFast.isPairLinked)
+
+            val uploaded1A = java.io.File(fastDir, "model (1).onnx")
+            writeSyntheticExternalGraph(uploaded1A, "model_int8.onnx.data")
+            java.io.File(fastDir, "graph_source.meta").writeText("model (1).onnx")
+
+            val linkedFast = com.example.ai.OnnxModelManager.linkEnginePairFiles(fastDir)
+            assertTrue(linkedFast.isGraphInstalled)
+            assertTrue(linkedFast.isWeightsInstalled)
+            assertTrue(linkedFast.isPairLinked)
+            assertEquals("model_int8.onnx.data", linkedFast.expectedWeightFileName)
+            assertTrue(java.io.File(fastDir, "model.onnx").exists())
+            assertTrue(java.io.File(fastDir, "model_int8.onnx.data").exists())
+
+            // 2. Standard SD: Upload Slot 2A (graph) FIRST, then Slot 2B with "wights (1).pb" typo SECOND
+            val stdDir = java.io.File(tempRoot, "unet_standard_sd").apply { mkdirs() }
+            writeSyntheticExternalGraph(java.io.File(stdDir, "model.onnx"), "weights.pb")
+
+            val partialStd = com.example.ai.OnnxModelManager.linkEnginePairFiles(stdDir)
+            assertTrue(partialStd.isGraphInstalled)
+            assertFalse(partialStd.isWeightsInstalled)
+            assertFalse(partialStd.isPairLinked)
+
+            java.io.File(stdDir, "wights (1).pb").writeBytes(ByteArray(72_000))
+            val linkedStd = com.example.ai.OnnxModelManager.linkEnginePairFiles(stdDir)
+            assertTrue(linkedStd.isPairLinked)
+            assertTrue(java.io.File(stdDir, "weights.pb").exists())
+        } finally {
+            tempRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun resolveSplitFolderMatches_phoneIgFlatFolder_populatesAllEightCoreSlotsSimultaneously() {
+        val parent = "ig"
+        val files = listOf(
+            com.example.ai.OnnxModelManager.DiscoveredFolderFile(
+                index = 0,
+                rawName = "model.onnx",
+                normalizedName = "model.onnx",
+                parentNameLower = parent,
+                sizeBytes = 3_050_000L,
+                externalLocations = listOf("model_int8.onnx.data"),
+                hasLcmOrInt8GraphOps = true
+            ),
+            com.example.ai.OnnxModelManager.DiscoveredFolderFile(
+                index = 1,
+                rawName = "model_int8.onnx.data",
+                normalizedName = "model_int8.onnx.data",
+                parentNameLower = parent,
+                sizeBytes = 860_500_000L
+            ),
+            com.example.ai.OnnxModelManager.DiscoveredFolderFile(
+                index = 2,
+                rawName = "model (1).onnx",
+                normalizedName = "model.onnx",
+                parentNameLower = parent,
+                sizeBytes = 1_950_000L,
+                externalLocations = listOf("weights.pb")
+            ),
+            com.example.ai.OnnxModelManager.DiscoveredFolderFile(
+                index = 3,
+                rawName = "wights.pb",
+                normalizedName = "wights.pb",
+                parentNameLower = parent,
+                sizeBytes = 3_440_000_000L
+            ),
+            com.example.ai.OnnxModelManager.DiscoveredFolderFile(
+                index = 4,
+                rawName = "model (3).onnx",
+                normalizedName = "model.onnx",
+                parentNameLower = parent,
+                sizeBytes = 492_540_000L
+            ),
+            com.example.ai.OnnxModelManager.DiscoveredFolderFile(
+                index = 5,
+                rawName = "model (7).onnx",
+                normalizedName = "model.onnx",
+                parentNameLower = parent,
+                sizeBytes = 198_080_000L
+            ),
+            com.example.ai.OnnxModelManager.DiscoveredFolderFile(
+                index = 6,
+                rawName = "model (8).onnx",
+                normalizedName = "model.onnx",
+                parentNameLower = parent,
+                sizeBytes = 136_760_000L
+            ),
+            com.example.ai.OnnxModelManager.DiscoveredFolderFile(
+                index = 7,
+                rawName = "vocab.json",
+                normalizedName = "vocab.json",
+                parentNameLower = parent,
+                sizeBytes = 860_000L
+            ),
+            com.example.ai.OnnxModelManager.DiscoveredFolderFile(
+                index = 8,
+                rawName = "merges.txt",
+                normalizedName = "merges.txt",
+                parentNameLower = parent,
+                sizeBytes = 525_000L
+            ),
+            com.example.ai.OnnxModelManager.DiscoveredFolderFile(
+                index = 9,
+                rawName = "det_10g.onnx",
+                normalizedName = "det_10g.onnx",
+                parentNameLower = parent,
+                sizeBytes = 16_900_000L
+            )
+        )
+
+        val plan = com.example.ai.OnnxModelManager.resolveSplitFolderMatches(files)
+        val matched = plan.slotFileIndices
+
+        assertEquals(listOf(0), matched[com.example.ai.DedicatedModelSlot.FAST_LCM_GRAPH])
+        assertEquals(listOf(1), matched[com.example.ai.DedicatedModelSlot.FAST_LCM_WEIGHTS])
+        assertEquals(listOf(2), matched[com.example.ai.DedicatedModelSlot.STANDARD_SD_GRAPH])
+        assertEquals(listOf(3), matched[com.example.ai.DedicatedModelSlot.STANDARD_SD_WEIGHTS])
+        assertEquals(listOf(4), matched[com.example.ai.DedicatedModelSlot.TEXT_ENCODER])
+        assertEquals(listOf(5), matched[com.example.ai.DedicatedModelSlot.VAE_DECODER])
+        assertEquals(listOf(6), matched[com.example.ai.DedicatedModelSlot.VAE_ENCODER])
+        assertEquals(listOf(7, 8), matched[com.example.ai.DedicatedModelSlot.TOKENIZER])
+        assertEquals(listOf(9), matched[com.example.ai.DedicatedModelSlot.FACE_DETECTOR])
+    }
+
+    @Test
+    fun migrateLegacyUnetDir_movesInt8UnetToFastLcmWithoutCopying() {
+        val tempRoot = java.nio.file.Files.createTempDirectory("legacy_migrate_test").toFile()
+        try {
+            val legacyUnet = java.io.File(tempRoot, "unet").apply { mkdirs() }
+            writeSyntheticExternalGraph(java.io.File(legacyUnet, "model.onnx"), "model_int8.onnx.data")
+            java.io.File(legacyUnet, "model_int8.onnx.data").writeBytes(ByteArray(75_000))
+
+            val migratedEngine = com.example.ai.OnnxModelManager.migrateLegacyUnetDir(tempRoot)
+            assertEquals(com.example.data.ActiveDiffusionEngine.FAST_LCM, migratedEngine)
+            assertFalse(legacyUnet.exists())
+            assertTrue(java.io.File(tempRoot, "unet_fast_lcm/model.onnx").exists())
+            assertTrue(java.io.File(tempRoot, "unet_fast_lcm/model_int8.onnx.data").exists())
+        } finally {
+            tempRoot.deleteRecursively()
+        }
+    }
 }
 
 

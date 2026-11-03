@@ -113,6 +113,7 @@ class ClipTokenizer(private val context: Context) {
 
     private var vocab: Map<String, Int>? = null
     private var bpeRanks: Map<Pair<String, String>, Int>? = null
+    private var loadedSourceSignature: String = ""
     private val byteEncoder: Map<Int, Char> = buildByteToUnicode()
 
     companion object {
@@ -140,18 +141,21 @@ class ClipTokenizer(private val context: Context) {
 
     @Synchronized
     private fun ensureLoaded() {
-        if (vocab != null && bpeRanks != null) return
-
         val customTokDir = File(context.filesDir, "onnx_models/tokenizer")
+        val vocabFile = File(customTokDir, "vocab.json")
+        val mergesFile = File(customTokDir, "merges.txt")
+        val currentSig = "${vocabFile.exists()}:${vocabFile.length()}:${vocabFile.lastModified()}|" +
+            "${mergesFile.exists()}:${mergesFile.length()}:${mergesFile.lastModified()}"
+
+        if (vocab != null && bpeRanks != null && loadedSourceSignature == currentSig) return
+
         val vocabJsonText = runCatching {
-            val f = File(customTokDir, "vocab.json")
-            if (f.exists() && f.length() > 1024L) f.readText()
+            if (vocabFile.exists() && vocabFile.length() > 1024L) vocabFile.readText()
             else context.assets.open("tokenizer/vocab.json").bufferedReader().use { it.readText() }
         }.getOrElse { "{}" }
 
         val mergesLines = runCatching {
-            val f = File(customTokDir, "merges.txt")
-            if (f.exists() && f.length() > 1024L) f.readLines()
+            if (mergesFile.exists() && mergesFile.length() > 1024L) mergesFile.readLines()
             else context.assets.open("tokenizer/merges.txt").bufferedReader().use { it.readLines() }
         }.getOrElse { emptyList() }
 
@@ -175,6 +179,7 @@ class ClipTokenizer(private val context: Context) {
 
         vocab = parsedVocab
         bpeRanks = parsedRanks
+        loadedSourceSignature = currentSig
     }
 
     fun encode(prompt: String): IntArray {

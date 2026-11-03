@@ -68,8 +68,10 @@ import coil.compose.AsyncImage
 import com.example.ai.GenerationProgress
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.ai.SamplerType
+import com.example.data.ActiveDiffusionEngine
 import com.example.data.AppPreferencesState
 import com.example.data.GeneratedCreation
+import com.example.ui.components.ActiveEngineSwitchCard
 import com.example.ui.components.CircularGlowIconButton
 import com.example.ui.components.FrostedGlassCard
 import com.example.ui.theme.DeepPlumText
@@ -100,6 +102,7 @@ fun ImageToImageScreen(
     latestImg2ImgCreation: GeneratedCreation?,
     latestSourcePreviewPath: String?,
     errorMessage: String?,
+    onSelectEngine: (ActiveDiffusionEngine) -> Unit = {},
     onPickReferencePhoto: () -> Unit,
     onUserPromptChange: (String) -> Unit,
     onGenerateImg2Img: (
@@ -125,10 +128,19 @@ fun ImageToImageScreen(
     val textColor = if (darkTheme) Color.White else DeepPlumText
     val subColor = if (darkTheme) Color(0xFFE1C9F7) else Color(0xFF4F376E)
 
-    var selectedSampler by remember { mutableStateOf(SamplerType.LCM_FAST) }
+    var selectedSampler by remember {
+        mutableStateOf(
+            if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) SamplerType.LCM_FAST
+            else SamplerType.EULER_STANDARD
+        )
+    }
     var strength by remember { mutableFloatStateOf(0.60f) }
-    var steps by remember { mutableIntStateOf(6) }
-    var guidanceScale by remember { mutableFloatStateOf(1.5f) }
+    var steps by remember {
+        mutableIntStateOf(if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) 8 else 18)
+    }
+    var guidanceScale by remember {
+        mutableFloatStateOf(if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) 1.5f else 7.0f)
+    }
     var seed by remember { mutableLongStateOf(Random.nextLong(100_000L, 999_999_999L)) }
     var negativePrompt by remember {
         mutableStateOf("blurry, low quality, deformed hands, distorted face, extra limbs")
@@ -136,6 +148,18 @@ fun ImageToImageScreen(
     var showSafetyCombinedPreview by remember { mutableStateOf(false) }
     var compareMode by remember { mutableStateOf(CompareViewMode.AFTER) }
     var liveElapsedSec by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+
+    androidx.compose.runtime.LaunchedEffect(preferences.activeEngine) {
+        if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) {
+            selectedSampler = SamplerType.LCM_FAST
+            steps = 8
+            guidanceScale = 1.5f
+        } else {
+            selectedSampler = SamplerType.EULER_STANDARD
+            steps = 18
+            guidanceScale = 7.0f
+        }
+    }
 
     androidx.compose.runtime.LaunchedEffect(isGenerating) {
         if (isGenerating) {
@@ -192,7 +216,7 @@ fun ImageToImageScreen(
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold)
                     )
                     Text(
-                        text = "${preferences.resolution} • ${metrics.activeUnetBadgeLabel(isTamil)}",
+                        text = "${preferences.resolution} • ${metrics.activeUnetBadgeLabel(isTamil, preferences.activeEngine)}",
                         color = subColor,
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -209,6 +233,17 @@ fun ImageToImageScreen(
                     )
                 }
             }
+
+            // Top 1-Touch Active Engine Switch (Fast LCM vs Standard SD)
+            ActiveEngineSwitchCard(
+                activeEngine = preferences.activeEngine,
+                metrics = metrics,
+                isTamil = isTamil,
+                darkTheme = darkTheme,
+                enabled = !isGenerating,
+                tagPrefix = "img2img",
+                onSelectEngine = onSelectEngine
+            )
 
             // 1. Reference Photo Card (Auto 1:1 Center-Crop Preview)
             FrostedGlassCard(darkTheme = darkTheme) {
@@ -498,6 +533,14 @@ fun ImageToImageScreen(
                                     selectedSampler = sampler
                                     steps = if (sampler == SamplerType.LCM_FAST) 8 else 18
                                     guidanceScale = sampler.defaultCfg
+                                    val targetEngine = if (sampler == SamplerType.LCM_FAST) {
+                                        ActiveDiffusionEngine.FAST_LCM
+                                    } else {
+                                        ActiveDiffusionEngine.STANDARD_SD
+                                    }
+                                    if (preferences.activeEngine != targetEngine) {
+                                        onSelectEngine(targetEngine)
+                                    }
                                 }
                                 .padding(vertical = 8.dp, horizontal = 6.dp)
                                 .testTag("img2img_sampler_${sampler.name.lowercase()}")
@@ -547,7 +590,7 @@ fun ImageToImageScreen(
                     valueRange = if (selectedSampler == SamplerType.LCM_FAST) 4f..12f else 10f..25f
                 )
 
-                val allFourModelsReady = metrics.isAllFourReady
+                val allFourModelsReady = metrics.isImg2ImgReadyFor(preferences.activeEngine)
                 val btnShape = RoundedCornerShape(22.dp)
 
                 if (isGenerating) {
@@ -652,13 +695,17 @@ fun ImageToImageScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = if (allFourModelsReady) {
-                                if (isTamil) "Transform Image Offline" else "Transform Image Offline"
-                            } else {
-                                if (isTamil) {
-                                    "4 ONNX மாடல்களையும் ஏற்றவும் (${metrics.installedCount}/4)"
+                                if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) {
+                                    "Transform Image (⚡ Fast LCM)"
                                 } else {
-                                    "Upload All 4 ONNX Models (${metrics.installedCount}/4)"
+                                    "Transform Image (🎨 Standard SD)"
                                 }
+                            } else {
+                                metrics.missingSummaryFor(
+                                    engine = preferences.activeEngine,
+                                    requireImg2Img = true,
+                                    isTamil = isTamil
+                                )
                             },
                             color = Color.White,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)

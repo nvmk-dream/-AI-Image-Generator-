@@ -8,10 +8,170 @@ import android.net.Uri
 import android.os.StatFs
 import android.provider.OpenableColumns
 import androidx.documentfile.provider.DocumentFile
+import com.example.data.ActiveDiffusionEngine
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+
+enum class DedicatedSlotGroup {
+    FAST_LCM_ENGINE,
+    STANDARD_SD_ENGINE,
+    ESSENTIAL_SHARED,
+    OPTIONAL_FACE_SWAP
+}
+
+enum class DedicatedModelSlot(
+    val slotTag: String,
+    val folderName: String,
+    val group: DedicatedSlotGroup,
+    val expectedFileHint: String,
+    val titleEn: String,
+    val titleTa: String,
+    val descriptionEn: String,
+    val descriptionTa: String
+) {
+    FAST_LCM_GRAPH(
+        slotTag = "1a_fast_lcm_graph",
+        folderName = "unet_fast_lcm",
+        group = DedicatedSlotGroup.FAST_LCM_ENGINE,
+        expectedFileHint = "model.onnx (~3.05 MB)",
+        titleEn = "Slot 1A: Fast LCM model.onnx (Graph)",
+        titleTa = "Slot 1A: Fast LCM model.onnx (Graph ~3.05 MB)",
+        descriptionEn = "Fast LCM UNet graph (~3.05 MB) — auto-linked with Slot 1B",
+        descriptionTa = "Fast LCM வரைபட ஃபைல் (~3.05 MB) — Slot 1B உடன் தானாக இணைக்கப்படும்"
+    ),
+    FAST_LCM_WEIGHTS(
+        slotTag = "1b_fast_lcm_weights",
+        folderName = "unet_fast_lcm",
+        group = DedicatedSlotGroup.FAST_LCM_ENGINE,
+        expectedFileHint = "model_int8.onnx.data (~860 MB)",
+        titleEn = "Slot 1B: Fast LCM model_int8.onnx.data (Weights)",
+        titleTa = "Slot 1B: Fast LCM model_int8.onnx.data (Weights ~860 MB)",
+        descriptionEn = "Fast LCM weights (~860 MB) — stored side-by-side with Slot 1A",
+        descriptionTa = "Fast LCM எடை ஃபைல் (~860 MB) — Slot 1A எதிர்பார்க்கும் பெயருடன் இணைக்கப்படும்"
+    ),
+    STANDARD_SD_GRAPH(
+        slotTag = "2a_standard_sd_graph",
+        folderName = "unet_standard_sd",
+        group = DedicatedSlotGroup.STANDARD_SD_ENGINE,
+        expectedFileHint = "model.onnx (~1.95 MB)",
+        titleEn = "Slot 2A: Standard SD model.onnx (Graph)",
+        titleTa = "Slot 2A: Standard SD model.onnx (Graph ~1.95 MB)",
+        descriptionEn = "Standard SD 1.5 UNet graph (~1.95 MB) — auto-linked with Slot 2B",
+        descriptionTa = "Standard SD வரைபட ஃபைல் (~1.95 MB) — Slot 2B உடன் தானாக இணைக்கப்படும்"
+    ),
+    STANDARD_SD_WEIGHTS(
+        slotTag = "2b_standard_sd_weights",
+        folderName = "unet_standard_sd",
+        group = DedicatedSlotGroup.STANDARD_SD_ENGINE,
+        expectedFileHint = "weights.pb / model.onnx_data (~3.44 GB)",
+        titleEn = "Slot 2B: Standard SD weights.pb / model.onnx_data",
+        titleTa = "Slot 2B: Standard SD weights.pb / model.onnx_data (~3.44 GB)",
+        descriptionEn = "High-quality SD 1.5 weights (~3.44 GB • supports wights.pb typo)",
+        descriptionTa = "Standard SD எடை ஃபைல் (~3.44 GB) — Slot 2A எதிர்பார்க்கும் பெயருடன் இணைக்கப்படும்"
+    ),
+    TEXT_ENCODER(
+        slotTag = "3_text_encoder",
+        folderName = "text_encoder",
+        group = DedicatedSlotGroup.ESSENTIAL_SHARED,
+        expectedFileHint = "model (3).onnx (~492 MB)",
+        titleEn = "Slot 3: Text Encoder CLIP (~492 MB)",
+        titleTa = "Slot 3: Text Encoder CLIP (model (3).onnx ~492 MB)",
+        descriptionEn = "Converts Tamil & English prompts into CLIP embeddings",
+        descriptionTa = "உங்கள் வாக்கியத்தை AI புரியும் எண்களாக மாற்றும் (~492 MB)"
+    ),
+    VAE_DECODER(
+        slotTag = "4_vae_decoder",
+        folderName = "vae_decoder",
+        group = DedicatedSlotGroup.ESSENTIAL_SHARED,
+        expectedFileHint = "model (4/7).onnx (~198 MB)",
+        titleEn = "Slot 4: VAE Decoder (~198 MB)",
+        titleTa = "Slot 4: VAE Decoder (model (4/7).onnx ~198 MB)",
+        descriptionEn = "Decodes latents into crisp 512×512 final photo",
+        descriptionTa = "வரைந்த குறிப்பைத் தெளிவான 512×512 புகைப்படமாக மாற்றும் (~198 MB)"
+    ),
+    VAE_ENCODER(
+        slotTag = "5_vae_encoder",
+        folderName = "vae_encoder",
+        group = DedicatedSlotGroup.ESSENTIAL_SHARED,
+        expectedFileHint = "model (8).onnx (~136 MB)",
+        titleEn = "Slot 5: VAE Encoder (~136 MB • Img2Img)",
+        titleTa = "Slot 5: VAE Encoder (model (8).onnx ~136 MB)",
+        descriptionEn = "Encodes reference photo for Image-to-Image transformation",
+        descriptionTa = "Image-to-Image மாற்றத்திற்காக பழைய படத்தை உள்ளே எடுக்கும் (~136 MB)"
+    ),
+    TOKENIZER(
+        slotTag = "6_tokenizer",
+        folderName = "tokenizer",
+        group = DedicatedSlotGroup.ESSENTIAL_SHARED,
+        expectedFileHint = "vocab.json & merges.txt (~1 MB)",
+        titleEn = "Slot 6: Tokenizer (vocab.json & merges.txt)",
+        titleTa = "Slot 6: Tokenizer (vocab.json & merges.txt ~1 MB)",
+        descriptionEn = "CLIP vocabulary & merges (~1 MB • built-in backup also active)",
+        descriptionTa = "vocab.json & merges.txt (~1 MB • Built-in துணையும் தயாராக உள்ளது)"
+    ),
+    FACE_DETECTOR(
+        slotTag = "det_10g",
+        folderName = "detection",
+        group = DedicatedSlotGroup.OPTIONAL_FACE_SWAP,
+        expectedFileHint = "det_10g.onnx (~16 MB)",
+        titleEn = "Face Detector (det_10g)",
+        titleTa = "Face Detector (det_10g • முகம் கண்டறியும் மாடல்)",
+        descriptionEn = "SCRFD 5-point landmark detector for Offline Face Swap",
+        descriptionTa = "புகைப்படத்தில் உள்ள முகம் & 5 புள்ளிகளைத் துல்லியமாகக் கண்டறியும்"
+    ),
+    FACE_RECOGNIZER(
+        slotTag = "w600k_r50",
+        folderName = "recognition",
+        group = DedicatedSlotGroup.OPTIONAL_FACE_SWAP,
+        expectedFileHint = "w600k_r50.onnx (~166 MB)",
+        titleEn = "Face Identity (w600k_r50)",
+        titleTa = "Face Identity (w600k_r50 • முக அடையாள மாடல்)",
+        descriptionEn = "512-D ArcFace source identity extractor",
+        descriptionTa = "Source புகைப்படத்தின் முக சாயலை 512-D அடையாளமாகப் பிரித்தெடுக்கும்"
+    ),
+    FACE_SWAPPER(
+        slotTag = "inswapper_128",
+        folderName = "face_swap",
+        group = DedicatedSlotGroup.OPTIONAL_FACE_SWAP,
+        expectedFileHint = "inswapper_128.onnx / hyperswap (~529 MB)",
+        titleEn = "Face Swapper (InSwapper / HyperSwap)",
+        titleTa = "Face Swapper (inswapper_128 / hyperswap)",
+        descriptionEn = "Supports inswapper_128.onnx & hyperswap_1b_256.onnx",
+        descriptionTa = "inswapper_128.onnx அல்லது hyperswap_1b_256.onnx மூலம் முகம் மாற்றும்"
+    );
+
+    val isCoreSlot: Boolean
+        get() = group != DedicatedSlotGroup.OPTIONAL_FACE_SWAP
+}
+
+data class DedicatedSlotStatus(
+    val slot: DedicatedModelSlot,
+    val isInstalled: Boolean,
+    val isPartial: Boolean = false,
+    val isLinkedWithPair: Boolean = false,
+    val sizeBytes: Long = 0L,
+    val displayFileName: String = "",
+    val statusDetailEn: String = "",
+    val statusDetailTa: String = ""
+)
+
+data class EngineLinkState(
+    val isGraphInstalled: Boolean,
+    val isWeightsInstalled: Boolean,
+    val isPairLinked: Boolean,
+    val isSelfContainedSingleFile: Boolean = false,
+    val graphBytes: Long = 0L,
+    val weightsBytes: Long = 0L,
+    val graphDisplayName: String = "",
+    val weightsDisplayName: String = "",
+    val expectedWeightFileName: String = ""
+) {
+    val totalBytes: Long
+        get() = graphBytes + weightsBytes
+}
 
 enum class DiffusionModelSlot(
     val canonicalFileName: String,
@@ -36,7 +196,7 @@ enum class DiffusionModelSlot(
     ),
     UNET(
         canonicalFileName = "unet.onnx",
-        folderHint = "unet",
+        folderHint = "unet_fast_lcm",
         matchKeywords = listOf("unet"),
         titleEn = "2. LCM / SD 1.5 UNet",
         titleTa = "2. LCM / SD 1.5 UNet (வேகமான மாடல்)",
@@ -114,9 +274,13 @@ enum class PreferredUnetImportMode {
 
 data class FolderImportResult(
     val importedSlots: List<DiffusionModelSlot>,
-    val dualUnetDetected: Boolean,
-    val selectedUnetVariant: UnetVariant,
-    val selectedUnetLabel: String
+    val importedDedicatedSlots: List<DedicatedModelSlot> = emptyList(),
+    val fastLcmReady: Boolean = false,
+    val standardSdReady: Boolean = false,
+    val dualUnetDetected: Boolean = false,
+    val selectedUnetVariant: UnetVariant = UnetVariant.NONE,
+    val selectedUnetLabel: String = "",
+    val skippedLowSpaceNote: String = ""
 )
 
 data class ModelSlotStatus(
@@ -144,6 +308,9 @@ data class RealDeviceAndModelMetrics(
     val ortRuntimeAvailable: Boolean = true,
     val ortVersion: String = "1.20.0",
     val slots: List<ModelSlotStatus> = emptyList(),
+    val dedicatedSlots: List<DedicatedSlotStatus> = emptyList(),
+    val fastLcmLink: EngineLinkState = EngineLinkState(false, false, false),
+    val standardSdLink: EngineLinkState = EngineLinkState(false, false, false),
     val totalModelBytes: Long = 0L,
     val cacheBytes: Long = 0L,
     val deviceFreeBytes: Long = 0L,
@@ -153,6 +320,136 @@ data class RealDeviceAndModelMetrics(
     val hasTokenizerFiles: Boolean = false,
     val activeRamSessionsCount: Int = 0
 ) {
+    val coreDedicatedSlots: List<DedicatedSlotStatus>
+        get() = dedicatedSlots.filter { it.slot.isCoreSlot }
+
+    val fastLcmDedicatedSlots: List<DedicatedSlotStatus>
+        get() = dedicatedSlots.filter { it.slot.group == DedicatedSlotGroup.FAST_LCM_ENGINE }
+
+    val standardSdDedicatedSlots: List<DedicatedSlotStatus>
+        get() = dedicatedSlots.filter { it.slot.group == DedicatedSlotGroup.STANDARD_SD_ENGINE }
+
+    val essentialSharedDedicatedSlots: List<DedicatedSlotStatus>
+        get() = dedicatedSlots.filter { it.slot.group == DedicatedSlotGroup.ESSENTIAL_SHARED }
+
+    val faceSwapDedicatedSlots: List<DedicatedSlotStatus>
+        get() = dedicatedSlots.filter { it.slot.group == DedicatedSlotGroup.OPTIONAL_FACE_SWAP }
+
+    val coreInstalledCount: Int
+        get() = coreDedicatedSlots.count { it.isInstalled }
+
+    val isFastLcmEngineReady: Boolean
+        get() = fastLcmLink.isPairLinked
+
+    val isStandardSdEngineReady: Boolean
+        get() = standardSdLink.isPairLinked
+
+    val isTextEncoderReady: Boolean
+        get() = dedicatedSlots.any { it.slot == DedicatedModelSlot.TEXT_ENCODER && it.isInstalled } ||
+            slots.any { it.slot == DiffusionModelSlot.TEXT_ENCODER && it.isInstalled }
+
+    val isVaeDecoderReady: Boolean
+        get() = dedicatedSlots.any { it.slot == DedicatedModelSlot.VAE_DECODER && it.isInstalled } ||
+            slots.any { it.slot == DiffusionModelSlot.VAE_DECODER && it.isInstalled }
+
+    val isVaeEncoderReady: Boolean
+        get() = dedicatedSlots.any { it.slot == DedicatedModelSlot.VAE_ENCODER && it.isInstalled } ||
+            slots.any { it.slot == DiffusionModelSlot.VAE_ENCODER && it.isInstalled }
+
+    fun isEngineReady(engine: ActiveDiffusionEngine): Boolean = when (engine) {
+        ActiveDiffusionEngine.FAST_LCM -> isFastLcmEngineReady
+        ActiveDiffusionEngine.STANDARD_SD -> isStandardSdEngineReady
+    }
+
+    fun isTxt2ImgReadyFor(engine: ActiveDiffusionEngine): Boolean =
+        isEngineReady(engine) && isTextEncoderReady && isVaeDecoderReady
+
+    fun isImg2ImgReadyFor(engine: ActiveDiffusionEngine): Boolean =
+        isTxt2ImgReadyFor(engine) && isVaeEncoderReady
+
+    fun missingSummaryFor(engine: ActiveDiffusionEngine, requireImg2Img: Boolean, isTamil: Boolean): String {
+        val missingParts = mutableListOf<String>()
+        when (engine) {
+            ActiveDiffusionEngine.FAST_LCM -> {
+                if (!fastLcmLink.isGraphInstalled) missingParts.add("Slot 1A (model.onnx)")
+                if (!fastLcmLink.isWeightsInstalled) missingParts.add("Slot 1B (model_int8.onnx.data)")
+            }
+            ActiveDiffusionEngine.STANDARD_SD -> {
+                if (!standardSdLink.isGraphInstalled) missingParts.add("Slot 2A (model.onnx)")
+                if (!standardSdLink.isWeightsInstalled) missingParts.add("Slot 2B (weights.pb)")
+            }
+        }
+        if (!isTextEncoderReady) missingParts.add("Slot 3 (Text Encoder)")
+        if (!isVaeDecoderReady) missingParts.add("Slot 4 (VAE Decoder)")
+        if (requireImg2Img && !isVaeEncoderReady) missingParts.add("Slot 5 (VAE Encoder)")
+
+        if (missingParts.isEmpty()) {
+            return if (isTamil) "தயாராக உள்ளது" else "Ready"
+        }
+        val first = missingParts.first()
+        return if (missingParts.size == 1) {
+            if (isTamil) "$first ஏற்றவும்" else "Upload $first"
+        } else {
+            if (isTamil) "$first + ${missingParts.size - 1} மாடல் ஏற்றவும்"
+            else "Upload $first + ${missingParts.size - 1} more"
+        }
+    }
+
+    fun activeEngineSummaryLine(engine: ActiveDiffusionEngine, isTamil: Boolean): String {
+        return when (engine) {
+            ActiveDiffusionEngine.FAST_LCM -> {
+                when {
+                    fastLcmLink.isPairLinked -> {
+                        val sizeStr = OnnxModelManager.formatBytes(fastLcmLink.totalBytes)
+                        if (isTamil) {
+                            "🔗 Fast LCM தயார்: Slot 1A + Slot 1B இணைக்கப்பட்டது ($sizeStr • 4–8 Steps)"
+                        } else {
+                            "🔗 Fast LCM Ready: Slot 1A + Slot 1B linked ($sizeStr • 4–8 Steps)"
+                        }
+                    }
+                    fastLcmLink.isGraphInstalled && !fastLcmLink.isWeightsInstalled -> {
+                        val exp = fastLcmLink.expectedWeightFileName.ifBlank { "model_int8.onnx.data" }
+                        if (isTamil) "⚠️ Slot 1A உள்ளது • இனி Slot 1B ($exp) ஏற்றவும்"
+                        else "⚠️ Slot 1A uploaded • Now upload Slot 1B ($exp)"
+                    }
+                    !fastLcmLink.isGraphInstalled && fastLcmLink.isWeightsInstalled -> {
+                        if (isTamil) "⚠️ Slot 1B உள்ளது • இனி Slot 1A (model.onnx) ஏற்றவும்"
+                        else "⚠️ Slot 1B uploaded • Now upload Slot 1A (model.onnx)"
+                    }
+                    else -> {
+                        if (isTamil) "Slot 1A (model.onnx) & Slot 1B (model_int8.onnx.data) ஏற்றவும்"
+                        else "Upload Slot 1A (model.onnx) & Slot 1B (model_int8.onnx.data)"
+                    }
+                }
+            }
+            ActiveDiffusionEngine.STANDARD_SD -> {
+                when {
+                    standardSdLink.isPairLinked -> {
+                        val sizeStr = OnnxModelManager.formatBytes(standardSdLink.totalBytes)
+                        if (isTamil) {
+                            "🔗 Standard SD தயார்: Slot 2A + Slot 2B இணைக்கப்பட்டது ($sizeStr • High Quality)"
+                        } else {
+                            "🔗 Standard SD Ready: Slot 2A + Slot 2B linked ($sizeStr • High Quality)"
+                        }
+                    }
+                    standardSdLink.isGraphInstalled && !standardSdLink.isWeightsInstalled -> {
+                        val exp = standardSdLink.expectedWeightFileName.ifBlank { "weights.pb" }
+                        if (isTamil) "⚠️ Slot 2A உள்ளது • இனி Slot 2B ($exp) ஏற்றவும்"
+                        else "⚠️ Slot 2A uploaded • Now upload Slot 2B ($exp)"
+                    }
+                    !standardSdLink.isGraphInstalled && standardSdLink.isWeightsInstalled -> {
+                        if (isTamil) "⚠️ Slot 2B உள்ளது • இனி Slot 2A (model.onnx) ஏற்றவும்"
+                        else "⚠️ Slot 2B uploaded • Now upload Slot 2A (model.onnx)"
+                    }
+                    else -> {
+                        if (isTamil) "Slot 2A (model.onnx) & Slot 2B (weights.pb) ஏற்றவும்"
+                        else "Upload Slot 2A (model.onnx) & Slot 2B (weights.pb)"
+                    }
+                }
+            }
+        }
+    }
+
     val diffusionSlots: List<ModelSlotStatus>
         get() = slots.filter { !it.slot.isFaceSwapSlot }
 
@@ -164,72 +461,89 @@ data class RealDeviceAndModelMetrics(
 
     val unetVariant: UnetVariant
         get() {
+            if (isFastLcmEngineReady) return UnetVariant.FAST_LCM_INT8
+            if (isStandardSdEngineReady) return UnetVariant.HEAVY_FP32
             val u = unetSlotStatus ?: return UnetVariant.NONE
             if (!u.isInstalled) return UnetVariant.NONE
             return OnnxModelManager.classifyUnetVariant(u.sourceFileLabel, u.totalBytes)
         }
 
-    fun activeUnetBadgeLabel(isTamil: Boolean): String {
-        val u = unetSlotStatus
-        if (u == null || !u.isInstalled) {
-            return if (isTamil) "UNet: இன்னும் ஏற்றப்படவில்லை" else "UNet: Not uploaded yet"
-        }
-        val sizeStr = OnnxModelManager.formatBytes(u.totalBytes)
-        val src = u.sourceFileLabel.ifBlank { u.slot.canonicalFileName }
-        return when (unetVariant) {
-            UnetVariant.FAST_LCM_INT8 ->
-                "⚡ Fast LCM UNet: $src ($sizeStr)"
-            UnetVariant.COMPACT_FP16 ->
-                "⚡ FP16 UNet: $src ($sizeStr)"
-            UnetVariant.HEAVY_FP32 ->
-                if (isTamil) {
-                    "🐢 மெதுவான FP32 UNet: $src ($sizeStr)"
+    fun activeUnetBadgeLabel(isTamil: Boolean, engine: ActiveDiffusionEngine = ActiveDiffusionEngine.FAST_LCM): String {
+        return when (engine) {
+            ActiveDiffusionEngine.FAST_LCM -> {
+                if (isFastLcmEngineReady) {
+                    "⚡ Fast LCM (${OnnxModelManager.formatBytes(fastLcmLink.totalBytes)})"
                 } else {
-                    "🐢 Heavy FP32 UNet: $src ($sizeStr)"
+                    if (isTamil) "⚡ Fast LCM (ஏற்றப்படவில்லை)" else "⚡ Fast LCM (Not uploaded)"
                 }
-            UnetVariant.NONE ->
-                if (isTamil) "UNet: இன்னும் ஏற்றப்படவில்லை" else "UNet: Not uploaded yet"
+            }
+            ActiveDiffusionEngine.STANDARD_SD -> {
+                if (isStandardSdEngineReady) {
+                    "🎨 Standard SD (${OnnxModelManager.formatBytes(standardSdLink.totalBytes)})"
+                } else {
+                    if (isTamil) "🎨 Standard SD (ஏற்றப்படவில்லை)" else "🎨 Standard SD (Not uploaded)"
+                }
+            }
         }
     }
 
-    // Count of installed & complete core Diffusion models (0..4)
     val installedCount: Int
         get() = diffusionSlots.count { it.isInstalled }
 
     val faceSwapInstalledCount: Int
-        get() = faceSwapSlots.count { it.isInstalled }
+        get() = faceSwapDedicatedSlots.count { it.isInstalled }.let { c ->
+            if (c > 0 || dedicatedSlots.isNotEmpty()) c else faceSwapSlots.count { it.isInstalled }
+        }
 
     val totalInstalledCount: Int
-        get() = slots.count { it.isInstalled }
+        get() = dedicatedSlots.count { it.isInstalled }
 
     val hasAnySlotFilesOnDisk: Boolean
-        get() = slots.any { it.isInstalled || it.isIncompleteExternalGraph }
+        get() = dedicatedSlots.any { it.isInstalled || it.isPartial } ||
+            slots.any { it.isInstalled || it.isIncompleteExternalGraph }
 
     val incompleteSlots: List<ModelSlotStatus>
         get() = slots.filter { it.isIncompleteExternalGraph }
 
     val isTxt2ImgReady: Boolean
-        get() = diffusionSlots.filter { it.slot.requiredForTxt2Img }.let { req ->
-            req.isNotEmpty() && req.all { it.isInstalled }
-        }
+        get() = isTxt2ImgReadyFor(ActiveDiffusionEngine.FAST_LCM) ||
+            isTxt2ImgReadyFor(ActiveDiffusionEngine.STANDARD_SD) ||
+            diffusionSlots.filter { it.slot.requiredForTxt2Img }.let { req ->
+                req.isNotEmpty() && req.all { it.isInstalled }
+            }
 
     val isAllFourReady: Boolean
-        get() = diffusionSlots.isNotEmpty() && diffusionSlots.all { it.isInstalled }
+        get() = isImg2ImgReadyFor(ActiveDiffusionEngine.FAST_LCM) ||
+            isImg2ImgReadyFor(ActiveDiffusionEngine.STANDARD_SD) ||
+            (diffusionSlots.isNotEmpty() && diffusionSlots.all { it.isInstalled })
 
     val isFaceSwapReady: Boolean
         get() {
-            val detOk = slots.any { it.slot == DiffusionModelSlot.FACE_DETECTOR && it.isInstalled }
-            val swapOk = slots.any { it.slot == DiffusionModelSlot.FACE_SWAPPER && it.isInstalled }
+            val detOk = dedicatedSlots.any { it.slot == DedicatedModelSlot.FACE_DETECTOR && it.isInstalled } ||
+                slots.any { it.slot == DiffusionModelSlot.FACE_DETECTOR && it.isInstalled }
+            val swapOk = dedicatedSlots.any { it.slot == DedicatedModelSlot.FACE_SWAPPER && it.isInstalled } ||
+                slots.any { it.slot == DiffusionModelSlot.FACE_SWAPPER && it.isInstalled }
             return detOk && swapOk
         }
 }
 
 class OnnxModelManager(private val context: Context) {
 
-    private val activeSessions = ConcurrentHashMap<DiffusionModelSlot, OrtSession>()
+    private val activeSessions = ConcurrentHashMap<String, OrtSession>()
 
     val modelsRootDir: File
         get() = File(context.filesDir, "onnx_models").apply { if (!exists()) mkdirs() }
+
+    fun dedicatedFolder(slot: DedicatedModelSlot): File =
+        File(modelsRootDir, slot.folderName).apply { if (!exists()) mkdirs() }
+
+    fun engineFolder(engine: ActiveDiffusionEngine): File {
+        val dirName = when (engine) {
+            ActiveDiffusionEngine.FAST_LCM -> DedicatedModelSlot.FAST_LCM_GRAPH.folderName
+            ActiveDiffusionEngine.STANDARD_SD -> DedicatedModelSlot.STANDARD_SD_GRAPH.folderName
+        }
+        return File(modelsRootDir, dirName).apply { if (!exists()) mkdirs() }
+    }
 
     private fun slotDir(slot: DiffusionModelSlot): File =
         File(modelsRootDir, slot.folderHint).apply { if (!exists()) mkdirs() }
@@ -237,7 +551,25 @@ class OnnxModelManager(private val context: Context) {
     fun slotModelFile(slot: DiffusionModelSlot): File =
         File(slotDir(slot), "model.onnx")
 
+    fun resolveEngineUnetFile(engine: ActiveDiffusionEngine): File? {
+        migrateLegacyUnetDir(modelsRootDir)
+        val dir = engineFolder(engine)
+        linkEnginePairFiles(dir)
+        val onnx = dir.listFiles()
+            ?.firstOrNull { it.isFile && it.name.endsWith(".onnx", ignoreCase = true) && it.length() > 1024L }
+        return onnx
+    }
+
     fun resolveExistingSlotFile(slot: DiffusionModelSlot): File? {
+        migrateLegacyUnetDir(modelsRootDir)
+        if (slot == DiffusionModelSlot.UNET) {
+            val fastFile = resolveEngineUnetFile(ActiveDiffusionEngine.FAST_LCM)
+            if (fastFile != null && findMissingCompanionFiles(fastFile).isEmpty()) return fastFile
+            val stdFile = resolveEngineUnetFile(ActiveDiffusionEngine.STANDARD_SD)
+            if (stdFile != null && findMissingCompanionFiles(stdFile).isEmpty()) return stdFile
+            if (fastFile != null) return fastFile
+            if (stdFile != null) return stdFile
+        }
         val dir = slotDir(slot)
         val namedOnnx = dir.listFiles()
             ?.firstOrNull { it.isFile && it.name.endsWith(".onnx", ignoreCase = true) && it.length() > 1024L }
@@ -254,16 +586,24 @@ class OnnxModelManager(private val context: Context) {
     }
 
     fun inspectCurrentMetrics(): RealDeviceAndModelMetrics {
+        migrateLegacyUnetDir(modelsRootDir)
         purgeOrphanedDuplicateWeights()
+
+        val fastDir = engineFolder(ActiveDiffusionEngine.FAST_LCM)
+        val stdDir = engineFolder(ActiveDiffusionEngine.STANDARD_SD)
+        val fastLink = linkEnginePairFiles(fastDir)
+        val stdLink = linkEnginePairFiles(stdDir)
 
         val (ortOk, ortVer) = runCatching {
             val env = OrtEnvironment.getEnvironment()
             true to env.version
         }.getOrElse { false to "Unavailable" }
 
+        val dedicatedStatuses = buildDedicatedSlotStatuses(fastLink, stdLink)
+
         val slotStatuses = DiffusionModelSlot.entries.map { slot ->
-            val dir = slotDir(slot)
             val actualFile = resolveExistingSlotFile(slot)
+            val dir = actualFile?.parentFile ?: slotDir(slot)
             val requiredCompanions = if (actualFile != null) {
                 extractExternalDataLocations(actualFile)
             } else {
@@ -286,7 +626,7 @@ class OnnxModelManager(private val context: Context) {
                 ?.readText()?.trim().orEmpty()
 
             val installed = actualFile != null && missingCompanions.isEmpty()
-            val inRam = activeSessions.containsKey(slot)
+            val inRam = activeSessions.containsKey(slot.folderHint)
             ModelSlotStatus(
                 slot = slot,
                 isInstalled = installed,
@@ -307,7 +647,7 @@ class OnnxModelManager(private val context: Context) {
         }
 
         val tokDir = File(modelsRootDir, "tokenizer")
-        val hasTokenizer = File(tokDir, "vocab.json").exists() ||
+        val hasTokenizer = (File(tokDir, "vocab.json").exists() && File(tokDir, "merges.txt").exists()) ||
             File(modelsRootDir, "vocab.json").exists()
 
         val modelBytes = calculateDirectorySize(modelsRootDir)
@@ -325,6 +665,9 @@ class OnnxModelManager(private val context: Context) {
             ortRuntimeAvailable = ortOk,
             ortVersion = ortVer,
             slots = slotStatuses,
+            dedicatedSlots = dedicatedStatuses,
+            fastLcmLink = fastLink,
+            standardSdLink = stdLink,
             totalModelBytes = modelBytes,
             cacheBytes = cacheBytes,
             deviceFreeBytes = freeBytes,
@@ -336,34 +679,234 @@ class OnnxModelManager(private val context: Context) {
         )
     }
 
+    private fun buildDedicatedSlotStatuses(
+        fastLink: EngineLinkState,
+        stdLink: EngineLinkState
+    ): List<DedicatedSlotStatus> {
+        val result = ArrayList<DedicatedSlotStatus>(DedicatedModelSlot.entries.size)
+
+        // Slot 1A: Fast LCM Graph
+        result.add(
+            DedicatedSlotStatus(
+                slot = DedicatedModelSlot.FAST_LCM_GRAPH,
+                isInstalled = fastLink.isGraphInstalled,
+                isLinkedWithPair = fastLink.isPairLinked,
+                sizeBytes = fastLink.graphBytes,
+                displayFileName = fastLink.graphDisplayName.ifBlank { "model.onnx" },
+                statusDetailEn = when {
+                    fastLink.isPairLinked -> "🔗 Linked with Slot 1B • Ready"
+                    fastLink.isGraphInstalled -> {
+                        val exp = fastLink.expectedWeightFileName.ifBlank { "model_int8.onnx.data" }
+                        "✅ Uploaded (${formatBytes(fastLink.graphBytes)}) • Upload Slot 1B ($exp)"
+                    }
+                    else -> "Not uploaded yet • Expected: model.onnx (~3.05 MB)"
+                },
+                statusDetailTa = when {
+                    fastLink.isPairLinked -> "🔗 Slot 1B உடன் இணைக்கப்பட்டது • தயார்"
+                    fastLink.isGraphInstalled -> {
+                        val exp = fastLink.expectedWeightFileName.ifBlank { "model_int8.onnx.data" }
+                        "✅ ஏற்றப்பட்டது (${formatBytes(fastLink.graphBytes)}) • இனி Slot 1B ($exp) ஏற்றவும்"
+                    }
+                    else -> "இன்னும் ஏற்றப்படவில்லை • model.onnx (~3.05 MB)"
+                }
+            )
+        )
+
+        // Slot 1B: Fast LCM Weights
+        result.add(
+            DedicatedSlotStatus(
+                slot = DedicatedModelSlot.FAST_LCM_WEIGHTS,
+                isInstalled = fastLink.isWeightsInstalled,
+                isLinkedWithPair = fastLink.isPairLinked,
+                sizeBytes = fastLink.weightsBytes,
+                displayFileName = when {
+                    fastLink.isSelfContainedSingleFile -> "Embedded in Slot 1A"
+                    fastLink.weightsDisplayName.isNotBlank() -> fastLink.weightsDisplayName
+                    fastLink.expectedWeightFileName.isNotBlank() -> fastLink.expectedWeightFileName
+                    else -> "model_int8.onnx.data"
+                },
+                statusDetailEn = when {
+                    fastLink.isSelfContainedSingleFile -> "🔗 Embedded inside single-file Slot 1A • Ready"
+                    fastLink.isPairLinked -> "🔗 Linked as ${fastLink.weightsDisplayName} (${formatBytes(fastLink.weightsBytes)})"
+                    fastLink.isWeightsInstalled -> "✅ Uploaded (${formatBytes(fastLink.weightsBytes)}) • Now upload Slot 1A (model.onnx)"
+                    else -> {
+                        val exp = fastLink.expectedWeightFileName.ifBlank { "model_int8.onnx.data" }
+                        "Not uploaded yet • Expected: $exp (~860 MB)"
+                    }
+                },
+                statusDetailTa = when {
+                    fastLink.isSelfContainedSingleFile -> "🔗 Slot 1A உள்ளேயே இணைந்துள்ளது • தயார்"
+                    fastLink.isPairLinked -> "🔗 ${fastLink.weightsDisplayName} (${formatBytes(fastLink.weightsBytes)}) இணைக்கப்பட்டது"
+                    fastLink.isWeightsInstalled -> "✅ ஏற்றப்பட்டது (${formatBytes(fastLink.weightsBytes)}) • இனி Slot 1A (model.onnx) ஏற்றவும்"
+                    else -> {
+                        val exp = fastLink.expectedWeightFileName.ifBlank { "model_int8.onnx.data" }
+                        "இன்னும் ஏற்றப்படவில்லை • $exp (~860 MB)"
+                    }
+                }
+            )
+        )
+
+        // Slot 2A: Standard SD Graph
+        result.add(
+            DedicatedSlotStatus(
+                slot = DedicatedModelSlot.STANDARD_SD_GRAPH,
+                isInstalled = stdLink.isGraphInstalled,
+                isLinkedWithPair = stdLink.isPairLinked,
+                sizeBytes = stdLink.graphBytes,
+                displayFileName = stdLink.graphDisplayName.ifBlank { "model.onnx" },
+                statusDetailEn = when {
+                    stdLink.isPairLinked -> "🔗 Linked with Slot 2B • Ready"
+                    stdLink.isGraphInstalled -> {
+                        val exp = stdLink.expectedWeightFileName.ifBlank { "weights.pb" }
+                        "✅ Uploaded (${formatBytes(stdLink.graphBytes)}) • Upload Slot 2B ($exp)"
+                    }
+                    else -> "Not uploaded yet • Expected: model.onnx (~1.95 MB)"
+                },
+                statusDetailTa = when {
+                    stdLink.isPairLinked -> "🔗 Slot 2B உடன் இணைக்கப்பட்டது • தயார்"
+                    stdLink.isGraphInstalled -> {
+                        val exp = stdLink.expectedWeightFileName.ifBlank { "weights.pb" }
+                        "✅ ஏற்றப்பட்டது (${formatBytes(stdLink.graphBytes)}) • இனி Slot 2B ($exp) ஏற்றவும்"
+                    }
+                    else -> "இன்னும் ஏற்றப்படவில்லை • model.onnx (~1.95 MB)"
+                }
+            )
+        )
+
+        // Slot 2B: Standard SD Weights
+        result.add(
+            DedicatedSlotStatus(
+                slot = DedicatedModelSlot.STANDARD_SD_WEIGHTS,
+                isInstalled = stdLink.isWeightsInstalled,
+                isLinkedWithPair = stdLink.isPairLinked,
+                sizeBytes = stdLink.weightsBytes,
+                displayFileName = when {
+                    stdLink.isSelfContainedSingleFile -> "Embedded in Slot 2A"
+                    stdLink.weightsDisplayName.isNotBlank() -> stdLink.weightsDisplayName
+                    stdLink.expectedWeightFileName.isNotBlank() -> stdLink.expectedWeightFileName
+                    else -> "weights.pb"
+                },
+                statusDetailEn = when {
+                    stdLink.isSelfContainedSingleFile -> "🔗 Embedded inside single-file Slot 2A • Ready"
+                    stdLink.isPairLinked -> "🔗 Linked as ${stdLink.weightsDisplayName} (${formatBytes(stdLink.weightsBytes)})"
+                    stdLink.isWeightsInstalled -> "✅ Uploaded (${formatBytes(stdLink.weightsBytes)}) • Now upload Slot 2A (model.onnx)"
+                    else -> {
+                        val exp = stdLink.expectedWeightFileName.ifBlank { "weights.pb / model.onnx_data" }
+                        "Not uploaded yet • Expected: $exp (~3.44 GB)"
+                    }
+                },
+                statusDetailTa = when {
+                    stdLink.isSelfContainedSingleFile -> "🔗 Slot 2A உள்ளேயே இணைந்துள்ளது • தயார்"
+                    stdLink.isPairLinked -> "🔗 ${stdLink.weightsDisplayName} (${formatBytes(stdLink.weightsBytes)}) இணைக்கப்பட்டது"
+                    stdLink.isWeightsInstalled -> "✅ ஏற்றப்பட்டது (${formatBytes(stdLink.weightsBytes)}) • இனி Slot 2A (model.onnx) ஏற்றவும்"
+                    else -> {
+                        val exp = stdLink.expectedWeightFileName.ifBlank { "weights.pb / model.onnx_data" }
+                        "இன்னும் ஏற்றப்படவில்லை • $exp (~3.44 GB)"
+                    }
+                }
+            )
+        )
+
+        // Slots 3, 4, 5 + Face Swap Slots (Self-contained ONNX slots)
+        val standaloneMapping = listOf(
+            DedicatedModelSlot.TEXT_ENCODER to DiffusionModelSlot.TEXT_ENCODER,
+            DedicatedModelSlot.VAE_DECODER to DiffusionModelSlot.VAE_DECODER,
+            DedicatedModelSlot.VAE_ENCODER to DiffusionModelSlot.VAE_ENCODER,
+            DedicatedModelSlot.FACE_DETECTOR to DiffusionModelSlot.FACE_DETECTOR,
+            DedicatedModelSlot.FACE_RECOGNIZER to DiffusionModelSlot.FACE_RECOGNIZER,
+            DedicatedModelSlot.FACE_SWAPPER to DiffusionModelSlot.FACE_SWAPPER
+        )
+        for ((dedSlot, diffSlot) in standaloneMapping) {
+            val file = resolveExistingSlotFile(diffSlot)
+            val dir = slotDir(diffSlot)
+            val missing = if (file != null) findMissingCompanionFiles(file) else emptyList()
+            val installed = file != null && missing.isEmpty()
+            val partial = file != null && missing.isNotEmpty()
+            val srcName = File(dir, "source_name.meta").takeIf { it.exists() }
+                ?.readText()?.trim().orEmpty().ifBlank { file?.name ?: dedSlot.expectedFileHint }
+            val bytes = file?.length() ?: 0L
+
+            // Insert Slot 6 (Tokenizer) right after Slot 5 (VAE_ENCODER) so order matches enum 1..6 + FaceSwap
+            result.add(
+                DedicatedSlotStatus(
+                    slot = dedSlot,
+                    isInstalled = installed,
+                    isPartial = partial,
+                    sizeBytes = bytes,
+                    displayFileName = if (installed || partial) srcName else dedSlot.expectedFileHint,
+                    statusDetailEn = when {
+                        installed -> "✅ $srcName • ${formatBytes(bytes)}"
+                        partial -> "⚠️ Missing external weights: ${missing.joinToString()}"
+                        else -> "Not uploaded yet • ${dedSlot.expectedFileHint}"
+                    },
+                    statusDetailTa = when {
+                        installed -> "✅ $srcName • ${formatBytes(bytes)}"
+                        partial -> "⚠️ விடுபட்டுள்ளது: ${missing.joinToString()}"
+                        else -> "இன்னும் ஏற்றப்படவில்லை • ${dedSlot.expectedFileHint}"
+                    }
+                )
+            )
+
+            if (dedSlot == DedicatedModelSlot.VAE_ENCODER) {
+                val tokDir = dedicatedFolder(DedicatedModelSlot.TOKENIZER)
+                val vocabFile = File(tokDir, "vocab.json")
+                val mergesFile = File(tokDir, "merges.txt")
+                val hasVocab = vocabFile.exists() && vocabFile.length() > 1024L
+                val hasMerges = mergesFile.exists() && mergesFile.length() > 1024L
+                val tokInstalled = hasVocab && hasMerges
+                val tokPartial = hasVocab xor hasMerges
+                val tokBytes = (if (hasVocab) vocabFile.length() else 0L) +
+                    (if (hasMerges) mergesFile.length() else 0L)
+
+                result.add(
+                    DedicatedSlotStatus(
+                        slot = DedicatedModelSlot.TOKENIZER,
+                        isInstalled = tokInstalled,
+                        isPartial = tokPartial,
+                        sizeBytes = tokBytes,
+                        displayFileName = when {
+                            tokInstalled -> "vocab.json + merges.txt"
+                            hasVocab -> "vocab.json (merges.txt missing)"
+                            hasMerges -> "merges.txt (vocab.json missing)"
+                            else -> "vocab.json & merges.txt"
+                        },
+                        statusDetailEn = when {
+                            tokInstalled -> "✅ vocab.json + merges.txt • ${formatBytes(tokBytes)}"
+                            hasVocab -> "⚠️ vocab.json ready • Select merges.txt too"
+                            hasMerges -> "⚠️ merges.txt ready • Select vocab.json too"
+                            else -> "Not uploaded yet (Built-in CLIP tokenizer active)"
+                        },
+                        statusDetailTa = when {
+                            tokInstalled -> "✅ vocab.json + merges.txt • ${formatBytes(tokBytes)}"
+                            hasVocab -> "⚠️ vocab.json உள்ளது • merges.txt ஃபைலையும் தேர்வு செய்க"
+                            hasMerges -> "⚠️ merges.txt உள்ளது • vocab.json ஃபைலையும் தேர்வு செய்க"
+                            else -> "இன்னும் ஏற்றப்படவில்லை (Built-in Tokenizer தயாராக உள்ளது)"
+                        }
+                    )
+                )
+            }
+        }
+
+        return result
+    }
+
     /**
-     * Automatically deletes any stray duplicate external-weight files (such as a 3.44 GB weights.pb
-     * accidentally copied alongside self-contained text_encoder/vae_decoder/vae_encoder models),
-     * while preserving any external data file actually referenced by the slot's .onnx protobuf.
+     * Purges stray duplicate external weights accidentally copied alongside self-contained
+     * non-UNet slots (Slots 3, 4, 5 & Face Swap), without ever touching unet_fast_lcm or
+     * unet_standard_sd (where weights may legitimately be uploaded before model.onnx!).
      */
     private fun purgeOrphanedDuplicateWeights() {
         for (slot in DiffusionModelSlot.entries) {
+            if (slot == DiffusionModelSlot.UNET) continue
             val dir = slotDir(slot)
             val actualOnnx = resolveExistingSlotFile(slot) ?: continue
             val expectedLower = extractExternalDataLocations(actualOnnx)
                 .map { it.lowercase(Locale.US) }
                 .toSet()
-            val originName = File(dir, "source_name.meta").takeIf { it.exists() }
-                ?.readText()?.substringBefore("+")?.trim()?.ifBlank { actualOnnx.name }
-                ?: actualOnnx.name
 
             dir.listFiles()?.forEach { f ->
                 if (f.isFile && f.absolutePath != actualOnnx.absolutePath && isCompanionWeightFileName(f.name)) {
-                    val keep = if (expectedLower.isNotEmpty()) {
-                        f.name.lowercase(Locale.US) in expectedLower
-                    } else {
-                        shouldCopyCompanionWeight(
-                            onnxFileName = originName,
-                            onnxSizeBytes = actualOnnx.length(),
-                            companionFileName = f.name,
-                            onnxFileForRefScan = actualOnnx
-                        )
-                    }
+                    val keep = expectedLower.isNotEmpty() && f.name.lowercase(Locale.US) in expectedLower
                     if (!keep) {
                         runCatching { f.delete() }
                     }
@@ -372,355 +915,507 @@ class OnnxModelManager(private val context: Context) {
         }
     }
 
+    /**
+     * Uploads a single file into any of the Dedicated Split Slots (1A, 1B, 2A, 2B, 3, 4, 5, or Face Swap),
+     * supporting any upload order (e.g. 1B before 1A, or 2B wights.pb before 2A model.onnx) and
+     * automatically linking the pair in the shared engine folder!
+     */
+    fun importDedicatedSlotFromUri(
+        uri: Uri,
+        slot: DedicatedModelSlot,
+        originalNameHint: String? = null,
+        onProgress: ((String) -> Unit)? = null
+    ): Result<Pair<DedicatedModelSlot, Long>> = runCatching {
+        migrateLegacyUnetDir(modelsRootDir)
+        if (slot == DedicatedModelSlot.TOKENIZER) {
+            val bytes = importTokenizerUris(listOf(uri), listOf(originalNameHint), onProgress).getOrThrow()
+            return@runCatching DedicatedModelSlot.TOKENIZER to bytes
+        }
+
+        val rawHint = originalNameHint?.trim().orEmpty()
+        val normalizedHint = normalizeBrowserDuplicateName(rawHint)
+        val expectedTotal = queryUriLength(uri)
+
+        // Smart auto-routing if user tapped Graph button (1A/2A) and picked a .data/.pb weight file,
+        // or tapped Weights button (1B/2B) and picked a small .onnx graph file!
+        val effectiveSlot = when (slot) {
+            DedicatedModelSlot.FAST_LCM_GRAPH -> {
+                if (normalizedHint.isNotBlank() && isCompanionWeightFileName(normalizedHint)) {
+                    DedicatedModelSlot.FAST_LCM_WEIGHTS
+                } else slot
+            }
+            DedicatedModelSlot.FAST_LCM_WEIGHTS -> {
+                if (normalizedHint.endsWith(".onnx", ignoreCase = true) &&
+                    !isCompanionWeightFileName(normalizedHint)
+                ) {
+                    DedicatedModelSlot.FAST_LCM_GRAPH
+                } else slot
+            }
+            DedicatedModelSlot.STANDARD_SD_GRAPH -> {
+                if (normalizedHint.isNotBlank() && isCompanionWeightFileName(normalizedHint)) {
+                    DedicatedModelSlot.STANDARD_SD_WEIGHTS
+                } else slot
+            }
+            DedicatedModelSlot.STANDARD_SD_WEIGHTS -> {
+                if (normalizedHint.endsWith(".onnx", ignoreCase = true) &&
+                    !isCompanionWeightFileName(normalizedHint)
+                ) {
+                    DedicatedModelSlot.STANDARD_SD_GRAPH
+                } else slot
+            }
+            else -> slot
+        }
+
+        val targetDir = dedicatedFolder(effectiveSlot)
+        activeSessions.remove(effectiveSlot.folderName)?.runCatching { close() }
+
+        when (effectiveSlot) {
+            DedicatedModelSlot.FAST_LCM_GRAPH,
+            DedicatedModelSlot.STANDARD_SD_GRAPH -> {
+                ensureEnoughFreeSpace(expectedTotal)
+                val tempGraph = File(targetDir, "model.onnx.uploading_tmp")
+                val label = rawHint.ifBlank { "model.onnx" }
+                copyUriToFile(uri, tempGraph, expectedTotal) { copied, total ->
+                    onProgress?.invoke(formatCopyProgress(label, copied, total))
+                }
+                if (tempGraph.length() < 1024L) {
+                    tempGraph.delete()
+                    error("Selected file is too small to be a valid ONNX graph file.")
+                }
+                val protoLocations = extractExternalDataLocations(tempGraph)
+                if (tempGraph.length() in 30_000_000L..400_000_000L && protoLocations.isEmpty()) {
+                    val badLen = tempGraph.length()
+                    tempGraph.delete()
+                    error(
+                        "தேர்ந்தெடுக்கப்பட்ட ஃபைல் (${formatBytes(badLen)}) UNet மாடல் அல்ல; இது VAE மாடல் போல உள்ளது (Slot 4 / Slot 5-ல் ஏற்றவும்)."
+                    )
+                }
+
+                // Replace ONLY model.onnx + repair markers — NEVER delete companion weights in 1B/2B!
+                val destGraph = File(targetDir, "model.onnx")
+                if (destGraph.exists()) destGraph.delete()
+                OnnxQuantGraphRepairer.clearRepairMarkers(targetDir)
+                if (!tempGraph.renameTo(destGraph)) {
+                    tempGraph.copyTo(destGraph, overwrite = true)
+                    tempGraph.delete()
+                }
+                File(targetDir, "graph_source.meta").writeText(label)
+                linkEnginePairFiles(targetDir)
+                effectiveSlot to destGraph.length()
+            }
+
+            DedicatedModelSlot.FAST_LCM_WEIGHTS,
+            DedicatedModelSlot.STANDARD_SD_WEIGHTS -> {
+                ensureEnoughFreeSpace(expectedTotal)
+                val existingGraph = File(targetDir, "model.onnx").takeIf { it.exists() && it.length() > 1024L }
+                val expectedLocations = if (existingGraph != null) {
+                    extractExternalDataLocations(existingGraph)
+                } else {
+                    emptyList()
+                }
+                val defaultWeightName = if (effectiveSlot == DedicatedModelSlot.FAST_LCM_WEIGHTS) {
+                    "model_int8.onnx.data"
+                } else {
+                    "weights.pb"
+                }
+                val targetWeightName = when {
+                    expectedLocations.size == 1 -> expectedLocations.first()
+                    expectedLocations.isNotEmpty() -> {
+                        expectedLocations.firstOrNull { companionMatchesExpectedLocation(normalizedHint, it) }
+                            ?: expectedLocations.first()
+                    }
+                    normalizedHint.isNotBlank() && isCompanionWeightFileName(normalizedHint) -> normalizedHint
+                    else -> defaultWeightName
+                }
+
+                // Delete ONLY previous companion weight files — NEVER delete model.onnx in 1A/2A!
+                targetDir.listFiles()?.forEach { f ->
+                    if (f.isFile &&
+                        !f.name.equals("model.onnx", ignoreCase = true) &&
+                        !f.name.equals("graph_source.meta", ignoreCase = true)
+                    ) {
+                        runCatching { f.delete() }
+                    }
+                }
+                OnnxQuantGraphRepairer.clearRepairMarkers(targetDir)
+
+                val destWeight = File(targetDir, targetWeightName)
+                val displayLabel = rawHint.ifBlank { targetWeightName }
+                copyUriToFile(uri, destWeight, expectedTotal) { copied, total ->
+                    onProgress?.invoke(formatCopyProgress(displayLabel, copied, total))
+                }
+                if (destWeight.length() < MIN_VALID_COMPANION_BYTES) {
+                    destWeight.delete()
+                    error("Selected weights file ($displayLabel) is too small or incomplete.")
+                }
+                File(targetDir, "weights_source.meta").writeText(displayLabel)
+                linkEnginePairFiles(targetDir)
+                effectiveSlot to destWeight.length()
+            }
+
+            else -> {
+                // Standalone ONNX model slots: Slot 3, Slot 4, Slot 5, and Optional Face Swap slots
+                ensureEnoughFreeSpace(expectedTotal)
+                targetDir.listFiles()?.forEach { it.delete() }
+                val chosenName = if (effectiveSlot == DedicatedModelSlot.FACE_SWAPPER &&
+                    normalizedHint.contains("hyperswap", ignoreCase = true)
+                ) {
+                    "hyperswap_256.onnx"
+                } else {
+                    "model.onnx"
+                }
+                val destFile = File(targetDir, chosenName)
+                val displayLabel = rawHint.ifBlank { effectiveSlot.expectedFileHint }
+                copyUriToFile(uri, destFile, expectedTotal) { copied, total ->
+                    onProgress?.invoke(formatCopyProgress(displayLabel, copied, total))
+                }
+                if (destFile.length() < 1024L) {
+                    destFile.delete()
+                    error("Selected file is too small to be a valid ONNX model.")
+                }
+                if (rawHint.isNotBlank()) {
+                    File(targetDir, "source_name.meta").writeText(rawHint)
+                }
+                if (effectiveSlot == DedicatedModelSlot.FACE_SWAPPER) {
+                    File(modelsRootDir, "inswapper_emap_512x512.bin").delete()
+                }
+                effectiveSlot to destFile.length()
+            }
+        }
+    }
+
+    /**
+     * Imports one or both CLIP Tokenizer files (vocab.json & merges.txt) into Slot 6 without
+     * wiping the sibling file if uploaded one-by-one.
+     */
+    fun importTokenizerUris(
+        uris: List<Uri>,
+        nameHints: List<String?> = emptyList(),
+        onProgress: ((String) -> Unit)? = null
+    ): Result<Long> = runCatching {
+        if (uris.isEmpty()) error("No tokenizer file selected.")
+        val tokDir = dedicatedFolder(DedicatedModelSlot.TOKENIZER)
+        var totalSaved = 0L
+
+        uris.forEachIndexed { idx, uri ->
+            val rawName = nameHints.getOrNull(idx)?.trim().orEmpty()
+            val normLower = normalizeBrowserDuplicateName(rawName).lowercase(Locale.US)
+            val tempFile = File(tokDir, "tok_upload_$idx.tmp")
+            copyUriToFile(uri, tempFile, queryUriLength(uri)) { copied, total ->
+                onProgress?.invoke(formatCopyProgress(rawName.ifBlank { "tokenizer" }, copied, total))
+            }
+            if (tempFile.length() < 128L) {
+                tempFile.delete()
+                error("Selected tokenizer file is empty or invalid.")
+            }
+
+            val headSample = runCatching {
+                tempFile.inputStream().use { ins ->
+                    val b = ByteArray(minOf(2048, tempFile.length().toInt()))
+                    val r = ins.read(b)
+                    if (r > 0) String(b, 0, r, Charsets.UTF_8).trimStart() else ""
+                }
+            }.getOrDefault("")
+
+            val targetFileName = when {
+                normLower == "vocab.json" || normLower.contains("vocab") -> "vocab.json"
+                normLower == "merges.txt" || normLower.contains("merges") -> "merges.txt"
+                normLower == "tokenizer_config.json" -> "tokenizer_config.json"
+                normLower == "special_tokens_map.json" -> "special_tokens_map.json"
+                headSample.startsWith("{") -> "vocab.json"
+                else -> "merges.txt"
+            }
+            val dest = File(tokDir, targetFileName)
+            if (dest.exists()) dest.delete()
+            if (!tempFile.renameTo(dest)) {
+                tempFile.copyTo(dest, overwrite = true)
+                tempFile.delete()
+            }
+            totalSaved += dest.length()
+        }
+        totalSaved
+    }
+
+    fun deleteDedicatedSlot(slot: DedicatedModelSlot) {
+        activeSessions.remove(slot.folderName)?.runCatching { close() }
+        val dir = dedicatedFolder(slot)
+        when (slot) {
+            DedicatedModelSlot.FAST_LCM_GRAPH,
+            DedicatedModelSlot.STANDARD_SD_GRAPH -> {
+                File(dir, "model.onnx").delete()
+                File(dir, "graph_source.meta").delete()
+                File(dir, "source_name.meta").delete()
+                OnnxQuantGraphRepairer.clearRepairMarkers(dir)
+                linkEnginePairFiles(dir)
+            }
+            DedicatedModelSlot.FAST_LCM_WEIGHTS,
+            DedicatedModelSlot.STANDARD_SD_WEIGHTS -> {
+                dir.listFiles()?.forEach { f ->
+                    if (f.isFile &&
+                        !f.name.equals("model.onnx", ignoreCase = true) &&
+                        !f.name.equals("graph_source.meta", ignoreCase = true)
+                    ) {
+                        f.delete()
+                    }
+                }
+                OnnxQuantGraphRepairer.clearRepairMarkers(dir)
+                linkEnginePairFiles(dir)
+            }
+            DedicatedModelSlot.TOKENIZER -> {
+                dir.deleteRecursively()
+                File(modelsRootDir, "vocab.json").delete()
+                File(modelsRootDir, "merges.txt").delete()
+            }
+            else -> {
+                dir.deleteRecursively()
+                if (slot == DedicatedModelSlot.FACE_SWAPPER) {
+                    File(modelsRootDir, "inswapper_emap_512x512.bin").delete()
+                }
+            }
+        }
+    }
+
+    // Legacy compatibility wrappers
     fun importSingleSlotFromUri(
         uri: Uri,
         slot: DiffusionModelSlot,
         originalNameHint: String? = null,
         onProgress: ((String) -> Unit)? = null
-    ): Result<Long> = runCatching {
-        val normalizedHint = normalizeBrowserDuplicateName(originalNameHint.orEmpty())
-
-        // Smart protection: if this slot already has its .onnx graph shell and the user picked a
-        // companion weights file (e.g. weights.pb or model.onnx.data), attach it alongside model.onnx!
-        if (normalizedHint.isNotBlank() &&
-            isCompanionWeightFileName(normalizedHint) &&
-            resolveExistingSlotFile(slot) != null
-        ) {
-            return importCompanionWeightForSlot(uri, slot, originalNameHint, onProgress).map { it.second }
+    ): Result<Long> {
+        val mapped = when (slot) {
+            DiffusionModelSlot.TEXT_ENCODER -> DedicatedModelSlot.TEXT_ENCODER
+            DiffusionModelSlot.UNET -> DedicatedModelSlot.FAST_LCM_GRAPH
+            DiffusionModelSlot.VAE_DECODER -> DedicatedModelSlot.VAE_DECODER
+            DiffusionModelSlot.VAE_ENCODER -> DedicatedModelSlot.VAE_ENCODER
+            DiffusionModelSlot.FACE_DETECTOR -> DedicatedModelSlot.FACE_DETECTOR
+            DiffusionModelSlot.FACE_RECOGNIZER -> DedicatedModelSlot.FACE_RECOGNIZER
+            DiffusionModelSlot.FACE_SWAPPER -> DedicatedModelSlot.FACE_SWAPPER
         }
-
-        val targetDir = slotDir(slot)
-        targetDir.listFiles()?.forEach { it.delete() }
-        val chosenName = if (slot == DiffusionModelSlot.FACE_SWAPPER &&
-            normalizedHint.contains("hyperswap", ignoreCase = true)
-        ) {
-            "hyperswap_256.onnx"
-        } else {
-            "model.onnx"
-        }
-        val destFile = File(targetDir, chosenName)
-        val displayLabel = originalNameHint?.takeIf { it.isNotBlank() } ?: slot.canonicalFileName
-        val expectedTotal = queryUriLength(uri)
-        ensureEnoughFreeSpace(expectedTotal)
-
-        copyUriToFile(uri, destFile, expectedTotal) { copied, total ->
-            onProgress?.invoke(formatCopyProgress(displayLabel, copied, total))
-        }
-        if (destFile.length() < 1024L) {
-            destFile.delete()
-            error("Selected file is too small to be a valid ONNX model.")
-        }
-        if (!originalNameHint.isNullOrBlank()) {
-            File(targetDir, "source_name.meta").writeText(originalNameHint)
-        }
-        if (slot == DiffusionModelSlot.UNET) {
-            val protoLocations = extractExternalDataLocations(destFile)
-            if (destFile.length() in 30_000_000L..400_000_000L && protoLocations.isEmpty()) {
-                destFile.delete()
-                error("தேர்ந்தெடுக்கப்பட்ட ஃபைல் (${formatBytes(expectedTotal)}) UNet மாடல் அல்ல; இது VAE Decoder ஃபைல் போல உள்ளது. UNet மாடல் ~860 MB (.data) அல்லது 3.4 GB (FP32) அளவு இருக்கும்.")
-            }
-            File(modelsRootDir, "tokenizer/scheduler_config.json").delete()
-        }
-        if (slot == DiffusionModelSlot.FACE_SWAPPER) {
-            File(modelsRootDir, "inswapper_emap_512x512.bin").delete()
-        }
-        destFile.length()
+        return importDedicatedSlotFromUri(uri, mapped, originalNameHint, onProgress).map { it.second }
     }
 
-    /**
-     * Attaches an external weights companion file (e.g. weights.pb or model.onnx.data) to an
-     * existing .onnx slot, automatically normalizing browser-renamed duplicates like
-     * "weights (1).pb" or "model.onnx (1).data" to the exact filename expected by ONNX Runtime.
-     */
     fun importCompanionWeightForSlot(
         uri: Uri,
         slot: DiffusionModelSlot,
         originalNameHint: String? = null,
         onProgress: ((String) -> Unit)? = null
     ): Result<Pair<String, Long>> = runCatching {
-        val existingOnnx = resolveExistingSlotFile(slot)
-            ?: error("Please upload the .onnx graph file for ${slot.canonicalFileName} first.")
-        val targetDir = existingOnnx.parentFile ?: slotDir(slot)
-        val expectedLocations = extractExternalDataLocations(existingOnnx)
-        val normalizedHint = normalizeBrowserDuplicateName(originalNameHint.orEmpty())
-
-        val targetCompanionName = when {
-            expectedLocations.size == 1 -> expectedLocations.first()
-            expectedLocations.isNotEmpty() -> {
-                expectedLocations.firstOrNull { it.equals(normalizedHint, ignoreCase = true) }
-                    ?: expectedLocations.first()
+        val targetSlot = if (slot == DiffusionModelSlot.UNET) {
+            val norm = normalizeBrowserDuplicateName(originalNameHint.orEmpty()).lowercase(Locale.US)
+            if (norm.endsWith(".pb") && !engineFolder(ActiveDiffusionEngine.FAST_LCM).resolve("model.onnx").exists()) {
+                DedicatedModelSlot.STANDARD_SD_WEIGHTS
+            } else {
+                DedicatedModelSlot.FAST_LCM_WEIGHTS
             }
-            normalizedHint.isNotBlank() -> normalizedHint
-            else -> "weights.pb"
+        } else {
+            error("Companion weights are only supported for UNet engine slots.")
         }
-
-        val expectedTotal = queryUriLength(uri)
-        ensureEnoughFreeSpace(expectedTotal)
-
-        val destCompanion = File(targetDir, targetCompanionName)
-        copyUriToFile(uri, destCompanion, expectedTotal) { copied, total ->
-            onProgress?.invoke(formatCopyProgress(targetCompanionName, copied, total))
-        }
-        if (destCompanion.length() < MIN_VALID_COMPANION_BYTES) {
-            destCompanion.delete()
-            error("Selected companion file ($targetCompanionName) is too small or incomplete.")
-        }
-
-        val metaFile = File(targetDir, "source_name.meta")
-        val baseLabel = metaFile.takeIf { it.exists() }
-            ?.readText()?.substringBefore("+")?.trim()?.ifBlank { existingOnnx.name }
-            ?: existingOnnx.name
-        metaFile.writeText("$baseLabel + $targetCompanionName")
-
-        OnnxQuantGraphRepairer.clearRepairMarkers(targetDir)
-        activeSessions.remove(slot)?.runCatching { close() }
-        targetCompanionName to destCompanion.length()
+        val (_, bytes) = importDedicatedSlotFromUri(uri, targetSlot, originalNameHint, onProgress).getOrThrow()
+        val link = linkEnginePairFiles(dedicatedFolder(targetSlot))
+        link.weightsDisplayName.ifBlank { "weights" } to bytes
     }
 
     /**
-     * One-Touch Folder Upload (compatible with nested Hugging Face folders, flat SD 1.5 folders
-     * with model.onnx + weights.pb, quantized model.onnx + model.onnx.data, dual-UNet folders,
-     * AND Face Swap models). Automatically prioritizes mobile-optimized Fast LCM (~860 MB) when
-     * both Fast LCM and 3.44 GB FP32 UNets exist in the same folder, unless [preferredUnetMode]
-     * explicitly requests Standard SD.
+     * Upgraded One-Touch Folder Auto-Import (supports Phone > IG flat folder with browser-renamed
+     * files like model.onnx, model (1).onnx, model (3).onnx, model (7).onnx, model (8).onnx,
+     * model_int8.onnx.data, weights.pb / wights.pb, vocab.json, merges.txt, as well as nested
+     * Hugging Face folders and optional Face Swap models).
+     * Automatically populates ALL 8 Core Dedicated Split Slots cleanly!
      */
     fun importAllModelsFromFolder(
         treeUri: Uri,
         preferredUnetMode: PreferredUnetImportMode = PreferredUnetImportMode.AUTO_FAST_MOBILE,
         onProgress: (String) -> Unit
     ): Result<FolderImportResult> = runCatching {
+        migrateLegacyUnetDir(modelsRootDir)
         val rootDoc = DocumentFile.fromTreeUri(context, treeUri)
             ?: error("Could not open selected folder.")
 
-        data class DiscoveredDoc(val parentName: String, val doc: DocumentFile, val sizeBytes: Long)
+        data class RawDocEntry(val parentName: String, val doc: DocumentFile, val sizeBytes: Long)
 
-        val allFiles = mutableListOf<DiscoveredDoc>()
+        val rawDocs = mutableListOf<RawDocEntry>()
         fun walk(dir: DocumentFile, parentLabel: String) {
             for (child in dir.listFiles()) {
                 if (child.isDirectory) {
                     walk(child, child.name.orEmpty().lowercase(Locale.US))
                 } else if (child.isFile) {
-                    allFiles.add(DiscoveredDoc(parentLabel, child, child.length()))
+                    rawDocs.add(RawDocEntry(parentLabel, child, child.length()))
                 }
             }
         }
-        onProgress("Scanning folder for .onnx models...")
+        onProgress("Scanning folder for ONNX & Tokenizer files...")
         walk(rootDoc, rootDoc.name.orEmpty().lowercase(Locale.US))
 
-        val candidates = allFiles.mapIndexedNotNull { idx, entry ->
+        // Inspect small .onnx graph shells (<= 25 MB) directly via stream so we know their exact
+        // protobuf external_data location ("model_int8.onnx.data" vs "weights.pb" / "model.onnx_data")
+        // and whether they contain INT8/LCM ops!
+        val discoveredFiles = rawDocs.mapIndexed { idx, entry ->
             val rawName = entry.doc.name.orEmpty()
             val normName = normalizeBrowserDuplicateName(rawName)
-            if (normName.endsWith(".onnx", ignoreCase = true)) {
-                CandidateModelFile(
-                    index = idx,
-                    fileName = normName,
-                    parentNameLower = entry.parentName,
-                    fileSizeBytes = entry.sizeBytes
-                )
-            } else {
-                null
-            }
-        }
-        val allFileNamesByParent: Map<String, List<String>> = allFiles
-            .groupBy(
-                keySelector = { it.parentName },
-                valueTransform = { normalizeBrowserDuplicateName(it.doc.name.orEmpty()).lowercase(Locale.US) }
-            )
-        val companionSizesByParent: Map<String, Map<String, Long>> = allFiles
-            .groupBy { it.parentName }
-            .mapValues { (_, entries) ->
-                entries.associate {
-                    normalizeBrowserDuplicateName(it.doc.name.orEmpty()).lowercase(Locale.US) to it.sizeBytes
-                }
-            }
-
-        val dualUnetDetected = hasMultipleUnetCandidates(candidates, allFileNamesByParent)
-        val slotMatches = resolveFolderSlotMatches(
-            candidates = candidates,
-            allFileNamesByParent = allFileNamesByParent,
-            preferredUnetMode = preferredUnetMode,
-            companionSizesByParent = companionSizesByParent
-        )
-        val importedSlots = mutableListOf<DiffusionModelSlot>()
-        var selectedUnetLabel = ""
-        var selectedUnetTotalBytes = 0L
-
-        for ((slot, matchedIndex) in slotMatches) {
-            val match = allFiles[matchedIndex]
-            val origName = match.doc.name.orEmpty()
-            val normOrigName = normalizeBrowserDuplicateName(origName)
-            val labelName = origName.ifBlank { slot.canonicalFileName }
-            val onnxExpectedLen = match.sizeBytes
-
-            // Fast-path: skip re-copying non-UNet self-contained models that are already intact on disk
-            if (slot != DiffusionModelSlot.UNET) {
-                val existingOnnx = resolveExistingSlotFile(slot)
-                if (existingOnnx != null &&
-                    onnxExpectedLen > MAX_EXTERNAL_GRAPH_SHELL_BYTES &&
-                    existingOnnx.length() == onnxExpectedLen &&
-                    extractExternalDataLocations(existingOnnx).isEmpty() &&
-                    findMissingCompanionFiles(existingOnnx).isEmpty()
-                ) {
-                    onProgress("Verified $labelName (already on device ✓)")
-                    importedSlots.add(slot)
-                    continue
-                }
-            }
-
-            onProgress("Copying $labelName...")
-            activeSessions.remove(slot)?.runCatching { close() }
-
-            val destDir = slotDir(slot)
-            destDir.listFiles()?.forEach { it.delete() }
-            val storedName = if (slot == DiffusionModelSlot.FACE_SWAPPER &&
-                normOrigName.contains("hyperswap", ignoreCase = true)
+            var extLocs = emptyList<String>()
+            var hasLcmOrInt8Ops = false
+            if (normName.endsWith(".onnx", ignoreCase = true) &&
+                entry.sizeBytes in 1025L..MAX_GRAPH_SHELL_STREAM_SCAN_BYTES
             ) {
-                "hyperswap_256.onnx"
-            } else {
-                "model.onnx"
-            }
-            val destOnnx = File(destDir, storedName)
-            ensureEnoughFreeSpace(onnxExpectedLen)
-            copyUriToFile(match.doc.uri, destOnnx, onnxExpectedLen) { copied, total ->
-                onProgress(formatCopyProgress(labelName, copied, total))
-            }
-
-            if (slot == DiffusionModelSlot.FACE_SWAPPER) {
-                File(modelsRootDir, "inswapper_emap_512x512.bin").delete()
-            }
-
-            // Inspect the imported .onnx protobuf for exact external weight file locations
-            val expectedLocations = extractExternalDataLocations(destOnnx)
-            val copiedCompanionNames = mutableListOf<String>()
-            var copiedCompanionBytes = 0L
-
-            if (expectedLocations.isNotEmpty()) {
-                for (expectedLoc in expectedLocations) {
-                    val siblingCandidates = allFiles.filter { other ->
-                        val otherRaw = other.doc.name.orEmpty()
-                        val otherNorm = normalizeBrowserDuplicateName(otherRaw)
-                        otherRaw != origName && isCompanionWeightFileName(otherNorm)
-                    }
-                    // Prefer companion in same subfolder, else fallback to unique match in tree
-                    val matchedCompanion = siblingCandidates.firstOrNull { other ->
-                        other.parentName == match.parentName &&
-                            companionMatchesExpectedLocation(other.doc.name.orEmpty(), expectedLoc)
-                    } ?: siblingCandidates.firstOrNull { other ->
-                        other.parentName == match.parentName &&
-                            shouldCopyCompanionWeight(
-                                onnxFileName = normOrigName,
-                                onnxSizeBytes = destOnnx.length(),
-                                companionFileName = normalizeBrowserDuplicateName(other.doc.name.orEmpty()),
-                                onnxFileForRefScan = destOnnx
-                            )
-                    } ?: siblingCandidates.singleOrNull { other ->
-                        companionMatchesExpectedLocation(other.doc.name.orEmpty(), expectedLoc)
-                    }
-
-                    if (matchedCompanion != null) {
-                        val compDest = File(destDir, expectedLoc)
-                        val compTotal = matchedCompanion.sizeBytes
-                        ensureEnoughFreeSpace(compTotal)
-                        onProgress("Copying $expectedLoc (external weights)...")
-                        copyUriToFile(matchedCompanion.doc.uri, compDest, compTotal) { copied, total ->
-                            onProgress(formatCopyProgress(expectedLoc, copied, total))
-                        }
-                        copiedCompanionNames.add(expectedLoc)
-                        copiedCompanionBytes += compDest.length()
+                runCatching {
+                    context.contentResolver.openInputStream(entry.doc.uri)?.use { ins ->
+                        val scan = scanGraphShellStream(ins, MAX_GRAPH_SHELL_STREAM_SCAN_BYTES)
+                        extLocs = scan.first
+                        hasLcmOrInt8Ops = scan.second
                     }
                 }
-            } else {
-                // Fallback for stem-matched external data if protobuf header wasn't standard
-                allFiles.filter { other ->
-                    val otherRaw = other.doc.name.orEmpty()
-                    val otherNorm = normalizeBrowserDuplicateName(otherRaw)
-                    other.parentName == match.parentName &&
-                        otherRaw != origName &&
-                        isCompanionWeightFileName(otherNorm) &&
-                        shouldCopyCompanionWeight(
-                            onnxFileName = normOrigName,
-                            onnxSizeBytes = destOnnx.length(),
-                            companionFileName = otherNorm,
-                            onnxFileForRefScan = destOnnx
-                        )
-                }.forEach { companion ->
-                    val compName = normalizeBrowserDuplicateName(companion.doc.name ?: "model.onnx_data")
-                    val compDest = File(destDir, compName)
-                    val compTotal = companion.sizeBytes
-                    ensureEnoughFreeSpace(compTotal)
-                    onProgress("Copying $compName (external weights)...")
-                    copyUriToFile(companion.doc.uri, compDest, compTotal) { copied, total ->
-                        onProgress(formatCopyProgress(compName, copied, total))
-                    }
-                    copiedCompanionNames.add(compName)
-                    copiedCompanionBytes += compDest.length()
-                }
             }
-
-            val labelToSave = if (copiedCompanionNames.isNotEmpty() && origName.isNotBlank()) {
-                "$origName + ${copiedCompanionNames.joinToString(" + ")}"
-            } else {
-                origName
-            }
-            if (labelToSave.isNotBlank()) {
-                File(destDir, "source_name.meta").writeText(labelToSave)
-            }
-
-            if (slot == DiffusionModelSlot.UNET) {
-                selectedUnetLabel = labelToSave.ifBlank { slot.canonicalFileName }
-                selectedUnetTotalBytes = destOnnx.length() + copiedCompanionBytes
-            }
-
-            if (destOnnx.exists() && destOnnx.length() > 1024L && findMissingCompanionFiles(destOnnx).isEmpty()) {
-                importedSlots.add(slot)
-            }
+            DiscoveredFolderFile(
+                index = idx,
+                rawName = rawName,
+                normalizedName = normName,
+                parentNameLower = entry.parentName,
+                sizeBytes = entry.sizeBytes,
+                externalLocations = extLocs,
+                hasLcmOrInt8GraphOps = hasLcmOrInt8Ops
+            )
         }
 
-        val chosenUnetVariant = classifyUnetVariant(selectedUnetLabel, selectedUnetTotalBytes)
+        val plan = resolveSplitFolderMatches(discoveredFiles)
+        val importedDedicated = mutableListOf<DedicatedModelSlot>()
+        var skippedLowSpaceNote = ""
 
-        // Copy tokenizer / scheduler config files if present, avoiding PNDMScheduler pollution on Fast LCM UNet
-        val tokDestDir = File(modelsRootDir, "tokenizer").apply { if (!exists()) mkdirs() }
-        if (DiffusionModelSlot.UNET in importedSlots && chosenUnetVariant == UnetVariant.FAST_LCM_INT8) {
+        // Import order: Fast LCM (1A, 1B) + Essential Shared (3, 4, 5, 6) + Face Swap FIRST,
+        // then Standard SD (2A, 2B) so a huge 3.44 GB weights.pb never starves Fast LCM on 64GB phones!
+        val orderedSlots = listOf(
+            DedicatedModelSlot.FAST_LCM_GRAPH,
+            DedicatedModelSlot.FAST_LCM_WEIGHTS,
+            DedicatedModelSlot.TEXT_ENCODER,
+            DedicatedModelSlot.VAE_DECODER,
+            DedicatedModelSlot.VAE_ENCODER,
+            DedicatedModelSlot.TOKENIZER,
+            DedicatedModelSlot.FACE_DETECTOR,
+            DedicatedModelSlot.FACE_RECOGNIZER,
+            DedicatedModelSlot.FACE_SWAPPER,
+            DedicatedModelSlot.STANDARD_SD_GRAPH,
+            DedicatedModelSlot.STANDARD_SD_WEIGHTS
+        )
+
+        for (slot in orderedSlots) {
+            val indices = plan.slotFileIndices[slot].orEmpty()
+            if (indices.isEmpty()) continue
+
+            if (slot == DedicatedModelSlot.TOKENIZER) {
+                val uris = indices.map { rawDocs[it].doc.uri }
+                val hints = indices.map { rawDocs[it].doc.name }
+                onProgress("Importing Slot 6 Tokenizer (vocab.json & merges.txt)...")
+                importTokenizerUris(uris, hints, onProgress).getOrThrow()
+                val tokDir = dedicatedFolder(DedicatedModelSlot.TOKENIZER)
+                if (File(tokDir, "vocab.json").exists() && File(tokDir, "merges.txt").exists()) {
+                    importedDedicated.add(DedicatedModelSlot.TOKENIZER)
+                }
+                continue
+            }
+
+            val fileIdx = indices.first()
+            val entry = rawDocs[fileIdx]
+            val origName = entry.doc.name.orEmpty().ifBlank { slot.expectedFileHint }
+            val expectedLen = entry.sizeBytes
+
+            // Fast-path: skip re-copying large intact files already on disk with identical byte size!
+            if (isDedicatedSlotAlreadyIntactOnDisk(slot, expectedLen)) {
+                onProgress("Verified ${slot.name} ($origName already on device ✓)")
+                importedDedicated.add(slot)
+                continue
+            }
+
+            // Graceful disk-space check for optional secondary 3.44 GB Standard SD weights when Fast LCM is already present
+            if (slot == DedicatedModelSlot.STANDARD_SD_WEIGHTS &&
+                DedicatedModelSlot.FAST_LCM_WEIGHTS in importedDedicated &&
+                !hasEnoughFreeSpace(expectedLen)
+            ) {
+                skippedLowSpaceNote = "Standard SD 3.44 GB weights skipped (insufficient phone storage); Fast LCM is Ready!"
+                continue
+            }
+
+            val (_, _) = importDedicatedSlotFromUri(
+                uri = entry.doc.uri,
+                slot = slot,
+                originalNameHint = origName,
+                onProgress = onProgress
+            ).getOrThrow()
+            importedDedicated.add(slot)
+        }
+
+        val fastLink = linkEnginePairFiles(engineFolder(ActiveDiffusionEngine.FAST_LCM))
+        val stdLink = linkEnginePairFiles(engineFolder(ActiveDiffusionEngine.STANDARD_SD))
+
+        // Clean any PNDMScheduler pollution if Fast LCM is present
+        val tokDestDir = dedicatedFolder(DedicatedModelSlot.TOKENIZER)
+        if (fastLink.isPairLinked) {
             File(tokDestDir, "scheduler_config.json").delete()
         }
-        val configNames = setOf(
-            "vocab.json",
-            "merges.txt",
-            "tokenizer_config.json",
-            "special_tokens_map.json",
-            "scheduler_config.json",
-            "preprocessor_config.json"
-        )
-        allFiles.forEach { cfg ->
-            val normCfgName = normalizeBrowserDuplicateName(cfg.doc.name.orEmpty()).lowercase(Locale.US)
-            if (normCfgName in configNames) {
-                val dest = File(tokDestDir, normCfgName)
-                if (normCfgName == "scheduler_config.json" && chosenUnetVariant == UnetVariant.FAST_LCM_INT8) {
-                    val tempScheduler = File(tokDestDir, "scheduler_config.tmp")
-                    runCatching {
-                        copyUriToFile(cfg.doc.uri, tempScheduler)
-                        val txt = tempScheduler.readText()
-                        if (txt.contains("LCMScheduler", ignoreCase = true)) {
-                            tempScheduler.copyTo(dest, overwrite = true)
-                        }
-                    }
-                    tempScheduler.delete()
-                } else {
-                    copyUriToFile(cfg.doc.uri, dest)
-                }
-            }
+
+        val legacyImported = mutableListOf<DiffusionModelSlot>()
+        if (DedicatedModelSlot.TEXT_ENCODER in importedDedicated) legacyImported.add(DiffusionModelSlot.TEXT_ENCODER)
+        if (fastLink.isPairLinked || stdLink.isPairLinked) legacyImported.add(DiffusionModelSlot.UNET)
+        if (DedicatedModelSlot.VAE_DECODER in importedDedicated) legacyImported.add(DiffusionModelSlot.VAE_DECODER)
+        if (DedicatedModelSlot.VAE_ENCODER in importedDedicated) legacyImported.add(DiffusionModelSlot.VAE_ENCODER)
+        if (DedicatedModelSlot.FACE_DETECTOR in importedDedicated) legacyImported.add(DiffusionModelSlot.FACE_DETECTOR)
+        if (DedicatedModelSlot.FACE_RECOGNIZER in importedDedicated) legacyImported.add(DiffusionModelSlot.FACE_RECOGNIZER)
+        if (DedicatedModelSlot.FACE_SWAPPER in importedDedicated) legacyImported.add(DiffusionModelSlot.FACE_SWAPPER)
+
+        val primaryVariant = when {
+            fastLink.isPairLinked -> UnetVariant.FAST_LCM_INT8
+            stdLink.isPairLinked -> UnetVariant.HEAVY_FP32
+            else -> UnetVariant.NONE
+        }
+        val primaryLabel = when {
+            fastLink.isPairLinked -> "${fastLink.graphDisplayName} + ${fastLink.weightsDisplayName}"
+            stdLink.isPairLinked -> "${stdLink.graphDisplayName} + ${stdLink.weightsDisplayName}"
+            else -> ""
         }
 
         FolderImportResult(
-            importedSlots = importedSlots,
-            dualUnetDetected = dualUnetDetected,
-            selectedUnetVariant = chosenUnetVariant,
-            selectedUnetLabel = selectedUnetLabel
+            importedSlots = legacyImported,
+            importedDedicatedSlots = importedDedicated,
+            fastLcmReady = fastLink.isPairLinked,
+            standardSdReady = stdLink.isPairLinked,
+            dualUnetDetected = fastLink.isGraphInstalled && stdLink.isGraphInstalled,
+            selectedUnetVariant = primaryVariant,
+            selectedUnetLabel = primaryLabel,
+            skippedLowSpaceNote = skippedLowSpaceNote
         )
     }
 
+    private fun isDedicatedSlotAlreadyIntactOnDisk(slot: DedicatedModelSlot, expectedLen: Long): Boolean {
+        if (expectedLen <= 1024L) return false
+        val dir = dedicatedFolder(slot)
+        return when (slot) {
+            DedicatedModelSlot.FAST_LCM_GRAPH,
+            DedicatedModelSlot.STANDARD_SD_GRAPH -> {
+                val f = File(dir, "model.onnx")
+                f.exists() && f.length() == expectedLen
+            }
+            DedicatedModelSlot.FAST_LCM_WEIGHTS,
+            DedicatedModelSlot.STANDARD_SD_WEIGHTS -> {
+                dir.listFiles()?.any { f ->
+                    f.isFile &&
+                        !f.name.equals("model.onnx", ignoreCase = true) &&
+                        !f.name.endsWith(".meta") &&
+                        f.length() == expectedLen
+                } == true
+            }
+            DedicatedModelSlot.TOKENIZER -> false
+            else -> {
+                val onnx = dir.listFiles()?.firstOrNull { it.isFile && it.name.endsWith(".onnx", true) }
+                onnx != null && onnx.length() == expectedLen && findMissingCompanionFiles(onnx).isEmpty()
+            }
+        }
+    }
+
     fun deleteSlotModel(slot: DiffusionModelSlot) {
-        activeSessions.remove(slot)?.runCatching { close() }
+        activeSessions.remove(slot.folderHint)?.runCatching { close() }
+        if (slot == DiffusionModelSlot.UNET) {
+            deleteDedicatedSlot(DedicatedModelSlot.FAST_LCM_GRAPH)
+            deleteDedicatedSlot(DedicatedModelSlot.FAST_LCM_WEIGHTS)
+            return
+        }
         slotDir(slot).deleteRecursively()
         File(modelsRootDir, slot.canonicalFileName).delete()
         if (slot == DiffusionModelSlot.FACE_SWAPPER) {
@@ -759,6 +1454,13 @@ class OnnxModelManager(private val context: Context) {
             }
         } ?: -1L
     }.getOrDefault(-1L)
+
+    private fun hasEnoughFreeSpace(requiredBytes: Long): Boolean {
+        if (requiredBytes <= 0L) return true
+        val freeBytes = runCatching { StatFs(context.filesDir.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
+        val safetyReserve = 150L * 1024L * 1024L
+        return freeBytes >= requiredBytes + safetyReserve
+    }
 
     private fun ensureEnoughFreeSpace(requiredBytes: Long) {
         if (requiredBytes <= 0L) return
@@ -816,6 +1518,23 @@ class OnnxModelManager(private val context: Context) {
         return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
     }
 
+    data class DiscoveredFolderFile(
+        val index: Int,
+        val rawName: String,
+        val normalizedName: String,
+        val parentNameLower: String,
+        val sizeBytes: Long,
+        val externalLocations: List<String> = emptyList(),
+        val hasLcmOrInt8GraphOps: Boolean = false
+    ) {
+        val normLower: String
+            get() = normalizedName.lowercase(Locale.US)
+    }
+
+    data class SplitFolderMatchPlan(
+        val slotFileIndices: Map<DedicatedModelSlot, List<Int>>
+    )
+
     data class CandidateModelFile(
         val index: Int,
         val fileName: String,
@@ -828,6 +1547,7 @@ class OnnxModelManager(private val context: Context) {
 
     companion object {
         private const val MAX_EXTERNAL_GRAPH_SHELL_BYTES = 15L * 1024L * 1024L
+        private const val MAX_GRAPH_SHELL_STREAM_SCAN_BYTES = 25L * 1024L * 1024L
         private const val MAX_PROTO_HEADER_SCAN_BYTES = 48L * 1024L * 1024L
         const val MIN_VALID_COMPANION_BYTES = 64L * 1024L
 
@@ -845,12 +1565,439 @@ class OnnxModelManager(private val context: Context) {
             't'.code.toByte(), 'i'.code.toByte(), 'o'.code.toByte(), 'n'.code.toByte(),
             0x12
         )
+        private val CONV_INTEGER_ASCII = "convinteger".toByteArray(Charsets.UTF_8)
+        private val TIMESTEP_COND_ASCII = "timestep_cond".toByteArray(Charsets.UTF_8)
 
         /**
-         * Normalizes browser duplicate suffixes from Android Download Manager:
-         * e.g. "weights (1).pb" -> "weights.pb", "model.onnx (1).data" -> "model.onnx.data",
-         * "model (2).onnx.data" -> "model.onnx.data", "unet (1).onnx" -> "unet.onnx".
+         * Automatically migrates any legacy `onnx_models/unet/` installation into
+         * `unet_fast_lcm/` (for ~860 MB Fast LCM / INT8 models) or `unet_standard_sd/`
+         * (for 3.44 GB FP32 Standard SD models) with zero file copying via renameTo.
          */
+        fun migrateLegacyUnetDir(modelsRootDir: File): ActiveDiffusionEngine? {
+            val legacyDir = File(modelsRootDir, "unet")
+            if (!legacyDir.exists() || !legacyDir.isDirectory) return null
+            val files = legacyDir.listFiles()?.filter { it.isFile }.orEmpty()
+            if (files.isEmpty()) {
+                legacyDir.deleteRecursively()
+                return null
+            }
+
+            val totalBytes = files.sumOf { it.length() }
+            val namesJoined = files.joinToString(" ") { it.name.lowercase(Locale.US) } + " " +
+                (File(legacyDir, "source_name.meta").takeIf { it.exists() }?.readText()?.lowercase(Locale.US).orEmpty())
+
+            val targetEngine = if (
+                namesJoined.contains("int8") ||
+                namesJoined.contains("lcm") ||
+                namesJoined.contains(".onnx.data") ||
+                (totalBytes in 1025L..1_800_000_000L && !namesJoined.contains("weights.pb"))
+            ) {
+                ActiveDiffusionEngine.FAST_LCM
+            } else {
+                ActiveDiffusionEngine.STANDARD_SD
+            }
+
+            val destDir = File(
+                modelsRootDir,
+                if (targetEngine == ActiveDiffusionEngine.FAST_LCM) "unet_fast_lcm" else "unet_standard_sd"
+            ).apply { if (!exists()) mkdirs() }
+
+            val destAlreadyHasGraph = File(destDir, "model.onnx").exists()
+            if (!destAlreadyHasGraph) {
+                for (f in files) {
+                    val targetFile = File(destDir, f.name)
+                    if (!f.renameTo(targetFile)) {
+                        runCatching {
+                            f.copyTo(targetFile, overwrite = true)
+                            f.delete()
+                        }
+                    }
+                }
+                linkEnginePairFiles(destDir)
+            }
+            legacyDir.deleteRecursively()
+            return targetEngine
+        }
+
+        /**
+         * Order-independent Internal Code Linker for `(Slot 1A + Slot 1B)` in `unet_fast_lcm/`
+         * and `(Slot 2A + Slot 2B)` in `unet_standard_sd/`.
+         * Ensures the companion weight file in [engineDir] is automatically renamed in O(1)
+         * to the exact external_data `location` expected inside `model.onnx`!
+         */
+        fun linkEnginePairFiles(engineDir: File): EngineLinkState {
+            if (!engineDir.exists() || !engineDir.isDirectory) {
+                return EngineLinkState(isGraphInstalled = false, isWeightsInstalled = false, isPairLinked = false)
+            }
+            val allFiles = engineDir.listFiles()?.filter { it.isFile }.orEmpty()
+
+            // Ensure any .onnx graph file is named model.onnx
+            var graphFile = allFiles.firstOrNull { it.name.equals("model.onnx", ignoreCase = true) && it.length() > 1024L }
+            if (graphFile == null) {
+                val otherOnnx = allFiles.firstOrNull {
+                    it.name.endsWith(".onnx", ignoreCase = true) &&
+                        !isCompanionWeightFileName(it.name) &&
+                        it.length() > 1024L
+                }
+                if (otherOnnx != null) {
+                    val canonical = File(engineDir, "model.onnx")
+                    if (otherOnnx.renameTo(canonical)) {
+                        graphFile = canonical
+                    } else {
+                        graphFile = otherOnnx
+                    }
+                }
+            }
+
+            val companionCandidates = engineDir.listFiles()?.filter { f ->
+                f.isFile &&
+                    f.absolutePath != graphFile?.absolutePath &&
+                    !f.name.endsWith(".meta", ignoreCase = true) &&
+                    !f.name.endsWith(".repair_tmp", ignoreCase = true) &&
+                    !f.name.endsWith(".uploading_tmp", ignoreCase = true) &&
+                    f.length() >= MIN_VALID_COMPANION_BYTES
+            }.orEmpty()
+
+            val graphOrigin = File(engineDir, "graph_source.meta").takeIf { it.exists() }
+                ?.readText()?.trim().orEmpty()
+                .ifBlank {
+                    File(engineDir, "source_name.meta").takeIf { it.exists() }
+                        ?.readText()?.substringBefore("+")?.trim().orEmpty()
+                }
+
+            val weightsOrigin = File(engineDir, "weights_source.meta").takeIf { it.exists() }
+                ?.readText()?.trim().orEmpty()
+
+            if (graphFile == null) {
+                val comp = companionCandidates.maxByOrNull { it.length() }
+                return if (comp != null) {
+                    EngineLinkState(
+                        isGraphInstalled = false,
+                        isWeightsInstalled = true,
+                        isPairLinked = false,
+                        weightsBytes = comp.length(),
+                        weightsDisplayName = weightsOrigin.ifBlank { comp.name }
+                    )
+                } else {
+                    EngineLinkState(isGraphInstalled = false, isWeightsInstalled = false, isPairLinked = false)
+                }
+            }
+
+            val expectedLocations = extractExternalDataLocations(graphFile)
+            if (expectedLocations.isEmpty()) {
+                // Self-contained single-file UNet (must be > 40 MB to be a real standalone model)
+                val selfContained = graphFile.length() > 40_000_000L
+                val gDisplay = graphOrigin.ifBlank { graphFile.name }
+                return EngineLinkState(
+                    isGraphInstalled = true,
+                    isWeightsInstalled = selfContained || companionCandidates.isNotEmpty(),
+                    isPairLinked = selfContained || companionCandidates.isNotEmpty(),
+                    isSelfContainedSingleFile = selfContained && companionCandidates.isEmpty(),
+                    graphBytes = graphFile.length(),
+                    weightsBytes = companionCandidates.sumOf { it.length() },
+                    graphDisplayName = gDisplay,
+                    weightsDisplayName = companionCandidates.firstOrNull()?.name.orEmpty()
+                )
+            }
+
+            val primaryExpected = expectedLocations.first()
+            var exactCompanion = File(engineDir, primaryExpected).takeIf {
+                it.exists() && it.length() >= MIN_VALID_COMPANION_BYTES
+            }
+
+            if (exactCompanion == null && companionCandidates.isNotEmpty()) {
+                val bestCandidate = companionCandidates.firstOrNull {
+                    companionMatchesExpectedLocation(it.name, primaryExpected)
+                } ?: companionCandidates.maxByOrNull { it.length() }
+
+                if (bestCandidate != null) {
+                    val target = File(engineDir, primaryExpected)
+                    if (bestCandidate.renameTo(target)) {
+                        exactCompanion = target
+                        OnnxQuantGraphRepairer.clearRepairMarkers(engineDir)
+                    } else {
+                        exactCompanion = bestCandidate
+                    }
+                }
+            }
+
+            val gDisplay = graphOrigin.ifBlank { graphFile.name }
+            return if (exactCompanion != null) {
+                File(engineDir, "source_name.meta").writeText("$gDisplay + ${exactCompanion.name}")
+                EngineLinkState(
+                    isGraphInstalled = true,
+                    isWeightsInstalled = true,
+                    isPairLinked = true,
+                    graphBytes = graphFile.length(),
+                    weightsBytes = exactCompanion.length(),
+                    graphDisplayName = gDisplay,
+                    weightsDisplayName = exactCompanion.name,
+                    expectedWeightFileName = primaryExpected
+                )
+            } else {
+                EngineLinkState(
+                    isGraphInstalled = true,
+                    isWeightsInstalled = false,
+                    isPairLinked = false,
+                    graphBytes = graphFile.length(),
+                    graphDisplayName = gDisplay,
+                    expectedWeightFileName = primaryExpected
+                )
+            }
+        }
+
+        /**
+         * Scans an `.onnx` graph shell InputStream (up to [maxBytes]) in one pass to extract
+         * protobuf `external_data` `location` strings AND detect INT8/LCM operators (`ConvInteger` / `timestep_cond`).
+         */
+        fun scanGraphShellStream(input: InputStream, maxBytes: Long = MAX_GRAPH_SHELL_STREAM_SCAN_BYTES): Pair<List<String>, Boolean> {
+            val discovered = LinkedHashSet<String>()
+            var hasLcmOrInt8 = false
+            val buf = ByteArray(64 * 1024)
+            var carry = ByteArray(0)
+            var scanned = 0L
+
+            while (scanned < maxBytes) {
+                val read = input.read(buf)
+                if (read <= 0) break
+                scanned += read
+                val window = ByteArray(carry.size + read)
+                System.arraycopy(carry, 0, window, 0, carry.size)
+                System.arraycopy(buf, 0, window, carry.size, read)
+
+                scanProtobufExternalLocations(window, discovered)
+                if (!hasLcmOrInt8) {
+                    if (containsAsciiIgnoreCase(window, CONV_INTEGER_ASCII) ||
+                        containsAsciiIgnoreCase(window, TIMESTEP_COND_ASCII)
+                    ) {
+                        hasLcmOrInt8 = true
+                    }
+                }
+
+                val keepLen = minOf(window.size, 160)
+                carry = window.copyOfRange(window.size - keepLen, window.size)
+            }
+            return discovered.toList() to hasLcmOrInt8
+        }
+
+        /**
+         * Resolves all 8 Core Dedicated Split Slots + 3 Optional Face Swap Slots simultaneously
+         * from a flat folder (`Phone > IG`) or nested Hugging Face folder tree!
+         */
+        fun resolveSplitFolderMatches(allFiles: List<DiscoveredFolderFile>): SplitFolderMatchPlan {
+            val assigned = LinkedHashMap<DedicatedModelSlot, List<Int>>()
+            val claimedFileIndices = HashSet<Int>()
+
+            val onnxCandidates = allFiles.filter {
+                it.normLower.endsWith(".onnx") && !isCompanionWeightFileName(it.normLower)
+            }
+            val companionFiles = allFiles.filter {
+                it.sizeBytes >= MIN_VALID_COMPANION_BYTES && isCompanionWeightFileName(it.normLower)
+            }
+
+            // 1. Match explicit non-UNet ONNX slots by keyword or subfolder name (excluding tiny external graph shells)
+            val explicitNonUnet = listOf(
+                DedicatedModelSlot.TEXT_ENCODER to DiffusionModelSlot.TEXT_ENCODER,
+                DedicatedModelSlot.VAE_DECODER to DiffusionModelSlot.VAE_DECODER,
+                DedicatedModelSlot.VAE_ENCODER to DiffusionModelSlot.VAE_ENCODER,
+                DedicatedModelSlot.FACE_DETECTOR to DiffusionModelSlot.FACE_DETECTOR,
+                DedicatedModelSlot.FACE_RECOGNIZER to DiffusionModelSlot.FACE_RECOGNIZER,
+                DedicatedModelSlot.FACE_SWAPPER to DiffusionModelSlot.FACE_SWAPPER
+            )
+            for ((dedSlot, diffSlot) in explicitNonUnet) {
+                val match = onnxCandidates.firstOrNull { cand ->
+                    cand.index !in claimedFileIndices &&
+                        matchesSlot(diffSlot, cand.normLower, cand.parentNameLower) &&
+                        (cand.externalLocations.isEmpty() || cand.parentNameLower == diffSlot.folderHint)
+                }
+                if (match != null) {
+                    assigned[dedSlot] = listOf(match.index)
+                    claimedFileIndices.add(match.index)
+                }
+            }
+
+            // 2. Flat-folder size-based fallback for self-contained Slots 3, 4, 5 (e.g. model (3).onnx, model (7).onnx, model (8).onnx)
+            if (DedicatedModelSlot.TEXT_ENCODER !in assigned) {
+                val textEnc = onnxCandidates.firstOrNull { cand ->
+                    cand.index !in claimedFileIndices &&
+                        cand.externalLocations.isEmpty() &&
+                        cand.sizeBytes in 300_000_000L..750_000_000L
+                }
+                if (textEnc != null) {
+                    assigned[DedicatedModelSlot.TEXT_ENCODER] = listOf(textEnc.index)
+                    claimedFileIndices.add(textEnc.index)
+                }
+            }
+            if (DedicatedModelSlot.VAE_DECODER !in assigned) {
+                val vaeDec = onnxCandidates.firstOrNull { cand ->
+                    cand.index !in claimedFileIndices &&
+                        cand.externalLocations.isEmpty() &&
+                        cand.sizeBytes in 170_000_000L..230_000_000L
+                }
+                if (vaeDec != null) {
+                    assigned[DedicatedModelSlot.VAE_DECODER] = listOf(vaeDec.index)
+                    claimedFileIndices.add(vaeDec.index)
+                }
+            }
+            if (DedicatedModelSlot.VAE_ENCODER !in assigned) {
+                val vaeEnc = onnxCandidates.firstOrNull { cand ->
+                    cand.index !in claimedFileIndices &&
+                        cand.externalLocations.isEmpty() &&
+                        cand.sizeBytes in 100_000_000L..169_000_000L
+                }
+                if (vaeEnc != null) {
+                    assigned[DedicatedModelSlot.VAE_ENCODER] = listOf(vaeEnc.index)
+                    claimedFileIndices.add(vaeEnc.index)
+                }
+            }
+
+            // 3. Classify remaining eligible UNet .onnx files into Slot 1A (Fast LCM) and/or Slot 2A (Standard SD)
+            val remainingUnetGraphs = onnxCandidates.filter { cand ->
+                cand.index !in claimedFileIndices && (
+                    cand.externalLocations.isNotEmpty() ||
+                        cand.sizeBytes <= MAX_EXTERNAL_GRAPH_SHELL_BYTES && companionFiles.isNotEmpty() ||
+                        cand.sizeBytes > 230_000_000L ||
+                        cand.normLower.contains("unet") ||
+                        cand.parentNameLower.contains("unet")
+                    )
+            }
+
+            fun findBestCompanionForGraph(
+                graph: DiscoveredFolderFile,
+                preferCompact: Boolean
+            ): DiscoveredFolderFile? {
+                val avail = companionFiles.filter { it.index !in claimedFileIndices }
+                if (avail.isEmpty()) return null
+                val expLoc = graph.externalLocations.firstOrNull()
+                if (expLoc != null) {
+                    val exactSameDir = avail.filter {
+                        it.parentNameLower == graph.parentNameLower &&
+                            it.normLower.equals(expLoc, ignoreCase = true)
+                    }
+                    if (exactSameDir.isNotEmpty()) {
+                        return if (preferCompact) exactSameDir.minByOrNull { it.sizeBytes }
+                        else exactSameDir.maxByOrNull { it.sizeBytes }
+                    }
+                    val compatSameDir = avail.filter {
+                        it.parentNameLower == graph.parentNameLower &&
+                            companionMatchesExpectedLocation(it.rawName, expLoc)
+                    }
+                    if (compatSameDir.isNotEmpty()) {
+                        return if (preferCompact) compatSameDir.minByOrNull { it.sizeBytes }
+                        else compatSameDir.maxByOrNull { it.sizeBytes }
+                    }
+                    val compatAny = avail.filter { companionMatchesExpectedLocation(it.rawName, expLoc) }
+                    if (compatAny.isNotEmpty()) {
+                        return if (preferCompact) compatAny.minByOrNull { it.sizeBytes }
+                        else compatAny.maxByOrNull { it.sizeBytes }
+                    }
+                }
+                return if (preferCompact) {
+                    avail.filter { it.sizeBytes <= 1_800_000_000L && !it.normLower.endsWith(".pb") }
+                        .minByOrNull { it.sizeBytes }
+                } else {
+                    avail.filter { it.sizeBytes > 1_800_000_000L || it.normLower.endsWith(".pb") }
+                        .maxByOrNull { it.sizeBytes }
+                }
+            }
+
+            fun isGraphFastLcm(graph: DiscoveredFolderFile): Boolean {
+                val locsLower = graph.externalLocations.map { it.lowercase(Locale.US) }
+                if (locsLower.any { it.contains("int8") || it.contains("lcm") }) return true
+                if (locsLower.any { it == "weights.pb" || it.endsWith("_weights.pb") }) return false
+                if (graph.hasLcmOrInt8GraphOps) return true
+                if (graph.rawName.contains("int8", true) || graph.rawName.contains("lcm", true) ||
+                    graph.parentNameLower.contains("int8") || graph.parentNameLower.contains("lcm")
+                ) return true
+                if (graph.externalLocations.isEmpty() && graph.sizeBytes in 230_000_001L..1_800_000_000L) {
+                    return true
+                }
+                val expLoc = locsLower.firstOrNull()
+                if (expLoc != null) {
+                    val matchedComp = companionFiles.firstOrNull {
+                        it.parentNameLower == graph.parentNameLower && it.normLower == expLoc
+                    } ?: companionFiles.firstOrNull { companionMatchesExpectedLocation(it.rawName, expLoc) }
+                    if (matchedComp != null) {
+                        return matchedComp.sizeBytes <= 1_800_000_000L && !matchedComp.normLower.endsWith(".pb")
+                    }
+                }
+                // If no protobuf header had external_data (e.g. unit test placeholder), check folder companions
+                val sameDirComps = companionFiles.filter { it.parentNameLower == graph.parentNameLower }
+                val hasCompactData = sameDirComps.any { it.normLower.contains(".data") && it.sizeBytes <= 1_800_000_000L }
+                val hasHeavyPb = sameDirComps.any { it.normLower.endsWith(".pb") || it.sizeBytes > 1_800_000_000L }
+                if (hasCompactData && !hasHeavyPb) return true
+                if (hasHeavyPb && !hasCompactData) return false
+                return graph.normLower != "unet.onnx"
+            }
+
+            val fastGraphs = remainingUnetGraphs.filter { isGraphFastLcm(it) }
+            val stdGraphs = remainingUnetGraphs.filter { !isGraphFastLcm(it) }
+
+            val chosenFastGraph = fastGraphs.firstOrNull()
+            if (chosenFastGraph != null) {
+                assigned[DedicatedModelSlot.FAST_LCM_GRAPH] = listOf(chosenFastGraph.index)
+                claimedFileIndices.add(chosenFastGraph.index)
+                if (chosenFastGraph.externalLocations.isNotEmpty() || chosenFastGraph.sizeBytes <= MAX_EXTERNAL_GRAPH_SHELL_BYTES) {
+                    val fastComp = findBestCompanionForGraph(chosenFastGraph, preferCompact = true)
+                    if (fastComp != null) {
+                        assigned[DedicatedModelSlot.FAST_LCM_WEIGHTS] = listOf(fastComp.index)
+                        claimedFileIndices.add(fastComp.index)
+                    }
+                }
+            }
+
+            val chosenStdGraph = stdGraphs.firstOrNull { it.index !in claimedFileIndices }
+                ?: fastGraphs.drop(1).firstOrNull { it.index !in claimedFileIndices }
+            if (chosenStdGraph != null) {
+                assigned[DedicatedModelSlot.STANDARD_SD_GRAPH] = listOf(chosenStdGraph.index)
+                claimedFileIndices.add(chosenStdGraph.index)
+                if (chosenStdGraph.externalLocations.isNotEmpty() || chosenStdGraph.sizeBytes <= MAX_EXTERNAL_GRAPH_SHELL_BYTES) {
+                    val stdComp = findBestCompanionForGraph(chosenStdGraph, preferCompact = false)
+                    if (stdComp != null) {
+                        assigned[DedicatedModelSlot.STANDARD_SD_WEIGHTS] = listOf(stdComp.index)
+                        claimedFileIndices.add(stdComp.index)
+                    }
+                }
+            }
+
+            // 4. Even if one of the graph shells wasn't downloaded yet, still populate unclaimed weight slots!
+            if (DedicatedModelSlot.FAST_LCM_WEIGHTS !in assigned) {
+                val looseFastWeight = companionFiles.firstOrNull {
+                    it.index !in claimedFileIndices &&
+                        !it.normLower.endsWith(".pb") &&
+                        (it.normLower.contains("int8") || it.sizeBytes <= 1_800_000_000L)
+                }
+                if (looseFastWeight != null) {
+                    assigned[DedicatedModelSlot.FAST_LCM_WEIGHTS] = listOf(looseFastWeight.index)
+                    claimedFileIndices.add(looseFastWeight.index)
+                }
+            }
+            if (DedicatedModelSlot.STANDARD_SD_WEIGHTS !in assigned) {
+                val looseStdWeight = companionFiles.firstOrNull {
+                    it.index !in claimedFileIndices &&
+                        (it.normLower.endsWith(".pb") || it.sizeBytes > 1_800_000_000L)
+                }
+                if (looseStdWeight != null) {
+                    assigned[DedicatedModelSlot.STANDARD_SD_WEIGHTS] = listOf(looseStdWeight.index)
+                    claimedFileIndices.add(looseStdWeight.index)
+                }
+            }
+
+            // 5. Slot 6: Tokenizer files (vocab.json & merges.txt)
+            val tokIndices = mutableListOf<Int>()
+            allFiles.firstOrNull { it.normLower == "vocab.json" && it.sizeBytes > 128L }?.let {
+                tokIndices.add(it.index)
+            }
+            allFiles.firstOrNull { it.normLower == "merges.txt" && it.sizeBytes > 128L }?.let {
+                tokIndices.add(it.index)
+            }
+            if (tokIndices.isNotEmpty()) {
+                assigned[DedicatedModelSlot.TOKENIZER] = tokIndices
+            }
+
+            return SplitFolderMatchPlan(slotFileIndices = assigned)
+        }
+
         fun normalizeBrowserDuplicateName(fileName: String): String {
             var cleaned = fileName.trim()
             if (cleaned.isEmpty()) return cleaned
@@ -865,11 +2012,6 @@ class OnnxModelManager(private val context: Context) {
             return cleaned.trim()
         }
 
-        /**
-         * Parses ONNX TensorProto.external_data StringStringEntryProto entries ("location" -> filename)
-         * to discover the exact external weight file(s) required by [onnxFile] (e.g. "weights.pb",
-         * "model.onnx.data", or "model.onnx_data").
-         */
         fun extractExternalDataLocations(onnxFile: File): List<String> {
             if (!onnxFile.exists() || !onnxFile.isFile || onnxFile.length() <= 0L) return emptyList()
             val cacheKey = FileScanCacheKey(onnxFile.absolutePath, onnxFile.lastModified(), onnxFile.length())
@@ -954,12 +2096,16 @@ class OnnxModelManager(private val context: Context) {
                 if (exact.exists() && exact.length() >= MIN_VALID_COMPANION_BYTES) {
                     false
                 } else {
-                    val caseMatch = filesInDir.firstOrNull {
-                        it.name.equals(reqName, ignoreCase = true) && it.length() >= MIN_VALID_COMPANION_BYTES
+                    val compatMatch = filesInDir.firstOrNull {
+                        it.absolutePath != onnxFile.absolutePath &&
+                            !it.name.endsWith(".meta") &&
+                            it.length() >= MIN_VALID_COMPANION_BYTES &&
+                            (it.name.equals(reqName, ignoreCase = true) ||
+                                companionMatchesExpectedLocation(it.name, reqName))
                     }
-                    if (caseMatch != null) {
-                        runCatching { caseMatch.renameTo(exact) }
-                        false
+                    if (compatMatch != null) {
+                        runCatching { compatMatch.renameTo(exact) }
+                        !exact.exists() && !compatMatch.exists()
                     } else {
                         true
                     }
@@ -972,7 +2118,8 @@ class OnnxModelManager(private val context: Context) {
             if (!normLower.endsWith(".onnx")) return false
             if (normLower == slot.canonicalFileName) return true
             if (slot.matchKeywords.any { kw -> normLower.contains(kw) }) return true
-            if (parentNameLower == slot.folderHint && normLower == "model.onnx") return true
+            val legacyFolderMatch = (slot == DiffusionModelSlot.UNET && parentNameLower == "unet")
+            if ((parentNameLower == slot.folderHint || legacyFolderMatch) && normLower == "model.onnx") return true
             return false
         }
 
@@ -1009,8 +2156,6 @@ class OnnxModelManager(private val context: Context) {
                     val siblings = allFileNamesByParent[cand.parentNameLower].orEmpty()
                     val hasExternalWeights = siblings.any { isCompanionWeightFileName(it) }
                     val sharesDiffusionFolder = cand.parentNameLower in coreMatchedParents
-                    // A graph shell must be <= 15 MB to pair with external weights, OR a full standalone UNet > 1.5 GB.
-                    // This prevents VAE decoders (198 MB) or text encoders (490 MB) from being mistaken for UNet.
                     (cand.fileSizeBytes <= MAX_EXTERNAL_GRAPH_SHELL_BYTES && hasExternalWeights) ||
                         cand.fileSizeBytes > 1_500_000_000L ||
                         (cand.fileSizeBytes == 0L && sharesDiffusionFolder)
@@ -1113,14 +2258,6 @@ class OnnxModelManager(private val context: Context) {
             }
         }
 
-        /**
-         * Resolves all slots cleanly:
-         * 1. Non-UNet slots claim their explicit matches first so subfolders like text_encoder/model.onnx
-         *    are never mistaken for UNet.
-         * 2. All eligible UNet candidates (both explicit unet.onnx and flat-folder model.onnx + companion
-         *    weights) are evaluated together and ranked by [preferredUnetMode] — automatically preferring
-         *    fast ~860 MB LCM INT8 models over slow 3.44 GB FP32 weights.pb when both exist in one folder!
-         */
         fun resolveFolderSlotMatches(
             candidates: List<CandidateModelFile>,
             allFileNamesByParent: Map<String, List<String>>,
@@ -1130,7 +2267,6 @@ class OnnxModelManager(private val context: Context) {
             val matched = LinkedHashMap<DiffusionModelSlot, Int>()
             val claimedIndices = HashSet<Int>()
 
-            // Step 1: Match all non-UNet slots first by explicit keywords/subfolders
             for (slot in DiffusionModelSlot.entries) {
                 if (slot == DiffusionModelSlot.UNET) continue
                 val found = candidates.firstOrNull { cand ->
@@ -1143,9 +2279,7 @@ class OnnxModelManager(private val context: Context) {
                 }
             }
 
-            // Step 1.5: Smart Flat-Folder Fallback by File Size for remaining unmatched slots
             if (DiffusionModelSlot.TEXT_ENCODER !in matched) {
-                // CLIP Text Encoder is ~490 MB (typical range: 300 MB .. 750 MB)
                 val textEnc = candidates.filter { it.index !in claimedIndices }.firstOrNull { cand ->
                     cand.fileSizeBytes in 300_000_000L..750_000_000L
                 }
@@ -1155,7 +2289,6 @@ class OnnxModelManager(private val context: Context) {
                 }
             }
             if (DiffusionModelSlot.VAE_DECODER !in matched) {
-                // VAE Decoder is ~198 MB (typical range: 170 MB .. 230 MB)
                 val vaeDec = candidates.filter { it.index !in claimedIndices }.firstOrNull { cand ->
                     cand.fileSizeBytes in 170_000_000L..230_000_000L
                 }
@@ -1165,7 +2298,6 @@ class OnnxModelManager(private val context: Context) {
                 }
             }
             if (DiffusionModelSlot.VAE_ENCODER !in matched) {
-                // VAE Encoder is ~136 MB (typical range: 100 MB .. 169 MB)
                 val vaeEnc = candidates.filter { it.index !in claimedIndices }.firstOrNull { cand ->
                     cand.fileSizeBytes in 100_000_000L..169_000_000L
                 }
@@ -1175,7 +2307,6 @@ class OnnxModelManager(private val context: Context) {
                 }
             }
 
-            // Step 2: Gather all eligible UNet candidates and pick best match per preferredUnetMode
             val coreMatchedParents = matched.entries
                 .filter { !it.key.isFaceSwapSlot }
                 .mapNotNull { entry -> candidates.firstOrNull { it.index == entry.value }?.parentNameLower }
@@ -1222,14 +2353,12 @@ class OnnxModelManager(private val context: Context) {
             if ((eNorm == "weights.pb" || eNorm.endsWith("weights.pb")) &&
                 (sNorm == "wights.pb" || sNorm.endsWith("wights.pb") || sNorm.endsWith(".pb"))
             ) return true
-            if (eNorm.contains(".data") && sNorm.contains(".data")) return true
+            if ((eNorm.contains(".onnx.data") || eNorm.contains(".onnx_data") || eNorm.endsWith(".data")) &&
+                (sNorm.contains(".onnx.data") || sNorm.contains(".onnx_data") || sNorm.endsWith(".data"))
+            ) return true
             return false
         }
 
-        /**
-         * Prevents duplicating a 3.44 GB weights.pb across self-contained .onnx slots in flat folders,
-         * while always copying external weights explicitly referenced inside an .onnx protobuf.
-         */
         fun shouldCopyCompanionWeight(
             onnxFileName: String,
             onnxSizeBytes: Long,
@@ -1246,7 +2375,7 @@ class OnnxModelManager(private val context: Context) {
             if (onnxFileForRefScan != null && onnxFileForRefScan.exists()) {
                 val protoLocations = extractExternalDataLocations(onnxFileForRefScan)
                 if (protoLocations.isNotEmpty()) {
-                    return protoLocations.any { it.equals(compLower, ignoreCase = true) } ||
+                    return protoLocations.any { companionMatchesExpectedLocation(compLower, it) } ||
                         compLower == "${onnxLower}_data" ||
                         compLower == "${onnxLower}.data" ||
                         compLower == "${onnxStem}.onnx_data" ||
@@ -1266,8 +2395,6 @@ class OnnxModelManager(private val context: Context) {
                 return true
             }
 
-            // Self-contained ONNX models (> 15 MB without protobuf external_data entries) embed
-            // their own tensor initializers and never use a generic flat-folder weights.pb.
             if (onnxSizeBytes > MAX_EXTERNAL_GRAPH_SHELL_BYTES || onnxSizeBytes <= 0L) {
                 return false
             }

@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.ai.DedicatedModelSlot
 import com.example.ai.DiffusionModelSlot
 import com.example.ai.PreferredUnetImportMode
 import com.example.ui.ActiveScreen
@@ -72,6 +73,7 @@ fun ImageGeneratorRoot(
     val uiState by appViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
+    var pendingDedicatedSlot by remember { mutableStateOf(DedicatedModelSlot.FAST_LCM_GRAPH) }
     var pendingSlotForSingleImport by remember { mutableStateOf(DiffusionModelSlot.TEXT_ENCODER) }
     var pendingSlotForCompanionImport by remember { mutableStateOf(DiffusionModelSlot.UNET) }
     var pendingFolderUnetMode by remember { mutableStateOf<PreferredUnetImportMode?>(null) }
@@ -90,6 +92,28 @@ fun ImageGeneratorRoot(
                 )
             }
             appViewModel.importAllModelsFromFolder(treeUri, modeOverride = modeOverride)
+        }
+    }
+
+    val dedicatedSlotPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { fileUri ->
+        if (fileUri != null) {
+            val fileName = runCatching {
+                DocumentFile.fromSingleUri(context, fileUri)?.name
+            }.getOrNull()
+            appViewModel.importDedicatedSlot(fileUri, pendingDedicatedSlot, fileName)
+        }
+    }
+
+    val tokenizerMultiPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            val hints = uris.map { u ->
+                runCatching { DocumentFile.fromSingleUri(context, u)?.name }.getOrNull()
+            }
+            appViewModel.importTokenizerFiles(uris, hints)
         }
     }
 
@@ -229,6 +253,7 @@ fun ImageGeneratorRoot(
                                         importProgressText = uiState.importProgressText,
                                         verificationReport = uiState.onnxVerificationReport,
                                         preferredUnetMode = uiState.preferredUnetMode,
+                                        onSelectEngine = appViewModel::setActiveEngine,
                                         onSelectPreferredUnetMode = appViewModel::setPreferredUnetImportMode,
                                         onSwitchUnetFromFolder = { mode ->
                                             if (!appViewModel.switchUnetFromSavedFolder(mode)) {
@@ -241,6 +266,14 @@ fun ImageGeneratorRoot(
                                             folderPickerLauncher.launch(null)
                                         },
                                         onVerifyPipeline = appViewModel::verifyOnnxPipeline,
+                                        onDedicatedSlotUpload = { slot ->
+                                            pendingDedicatedSlot = slot
+                                            dedicatedSlotPickerLauncher.launch(arrayOf("*/*"))
+                                        },
+                                        onTokenizerSlotUpload = {
+                                            tokenizerMultiPickerLauncher.launch(arrayOf("*/*"))
+                                        },
+                                        onDeleteDedicatedSlot = appViewModel::deleteDedicatedSlot,
                                         onSingleSlotUpload = { slot ->
                                             pendingSlotForSingleImport = slot
                                             singleModelPickerLauncher.launch(arrayOf("*/*"))
@@ -306,6 +339,7 @@ fun ImageGeneratorRoot(
                                         folderPickerLauncher.launch(null)
                                     }
                                 },
+                                onSelectEngine = appViewModel::setActiveEngine,
                                 onResolutionChange = appViewModel::setResolution,
                                 onUserPromptChange = appViewModel::updateUserImagePrompt,
                                 onGenerate = appViewModel::generateOfflineTextToImage,
@@ -331,6 +365,7 @@ fun ImageGeneratorRoot(
                                 latestImg2ImgCreation = uiState.latestImg2ImgCreation,
                                 latestSourcePreviewPath = uiState.latestImg2ImgSourcePath,
                                 errorMessage = uiState.generationErrorMessage,
+                                onSelectEngine = appViewModel::setActiveEngine,
                                 onPickReferencePhoto = {
                                     launchPhotoPicker(PhotoPickTarget.IMG2IMG_REFERENCE)
                                 },
@@ -358,6 +393,7 @@ fun ImageGeneratorRoot(
                                 progress = uiState.generationProgress,
                                 latestCharacterCreation = uiState.latestCharacterCreation,
                                 errorMessage = uiState.generationErrorMessage,
+                                onSelectEngine = appViewModel::setActiveEngine,
                                 onSelectCharacter = appViewModel::selectCharacter,
                                 onPickCharacterPhoto = {
                                     launchPhotoPicker(PhotoPickTarget.CHARACTER_REFERENCE)

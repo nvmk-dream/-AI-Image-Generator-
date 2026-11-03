@@ -74,9 +74,11 @@ import coil.compose.AsyncImage
 import com.example.ai.GenerationProgress
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.ai.SamplerType
+import com.example.data.ActiveDiffusionEngine
 import com.example.data.AppPreferencesState
 import com.example.data.CharacterProfile
 import com.example.data.GeneratedCreation
+import com.example.ui.components.ActiveEngineSwitchCard
 import com.example.ui.components.CircularGlowIconButton
 import com.example.ui.components.FrostedGlassCard
 import com.example.ui.theme.DeepPlumText
@@ -101,6 +103,7 @@ fun CharacterStudioScreen(
     progress: GenerationProgress?,
     latestCharacterCreation: GeneratedCreation?,
     errorMessage: String?,
+    onSelectEngine: (ActiveDiffusionEngine) -> Unit = {},
     onSelectCharacter: (String) -> Unit,
     onPickCharacterPhoto: () -> Unit,
     onClearCharacterPhoto: () -> Unit,
@@ -145,11 +148,32 @@ fun CharacterStudioScreen(
     }
     var useReferenceImg2Img by remember { mutableStateOf(false) }
     var strength by remember { mutableFloatStateOf(0.55f) }
-    var selectedSampler by remember { mutableStateOf(SamplerType.LCM_FAST) }
-    var steps by remember { mutableIntStateOf(6) }
-    var guidanceScale by remember { mutableFloatStateOf(1.5f) }
+    var selectedSampler by remember {
+        mutableStateOf(
+            if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) SamplerType.LCM_FAST
+            else SamplerType.EULER_STANDARD
+        )
+    }
+    var steps by remember {
+        mutableIntStateOf(if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) 6 else 16)
+    }
+    var guidanceScale by remember {
+        mutableFloatStateOf(if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) 1.5f else 7.0f)
+    }
     val negativePrompt = "blurry, deformed hands, distorted face, low quality, extra fingers"
     var showCombinedSafety by remember { mutableStateOf(false) }
+
+    LaunchedEffect(preferences.activeEngine) {
+        if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) {
+            selectedSampler = SamplerType.LCM_FAST
+            steps = 6
+            guidanceScale = 1.5f
+        } else {
+            selectedSampler = SamplerType.EULER_STANDARD
+            if (steps < 14) steps = 16
+            guidanceScale = 7.0f
+        }
+    }
 
     LaunchedEffect(activeChar?.id) {
         if (activeChar?.referencePhotoPath == null) {
@@ -209,6 +233,16 @@ fun CharacterStudioScreen(
                     Icon(Icons.Filled.Security, contentDescription = "Safety Prompt", tint = Color.White)
                 }
             }
+
+            ActiveEngineSwitchCard(
+                activeEngine = preferences.activeEngine,
+                metrics = metrics,
+                isTamil = isTamil,
+                darkTheme = darkTheme,
+                enabled = !isGenerating,
+                tagPrefix = "char_engine",
+                onSelectEngine = onSelectEngine
+            )
 
             // 1. Saved Character Profiles + Creator
             FrostedGlassCard(darkTheme = darkTheme) {
@@ -582,7 +616,11 @@ fun CharacterStudioScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    val ready = if (useReferenceImg2Img) metrics.isAllFourReady else metrics.isTxt2ImgReady
+                    val ready = if (useReferenceImg2Img) {
+                        metrics.isImg2ImgReadyFor(preferences.activeEngine)
+                    } else {
+                        metrics.isTxt2ImgReadyFor(preferences.activeEngine)
+                    }
                     val btnShape = RoundedCornerShape(22.dp)
 
                     if (isGenerating) {
@@ -660,7 +698,11 @@ fun CharacterStudioScreen(
                                 text = if (ready) {
                                     if (isTamil) "${activeChar.name} படம் உருவாக்கு" else "Generate ${activeChar.name} Scene"
                                 } else {
-                                    if (isTamil) "ONNX மாடல்களை ஏற்றவும் (${metrics.installedCount}/4)" else "Upload ONNX Models (${metrics.installedCount}/4)"
+                                    metrics.missingSummaryFor(
+                                        engine = preferences.activeEngine,
+                                        requireImg2Img = useReferenceImg2Img,
+                                        isTamil = isTamil
+                                    )
                                 },
                                 color = Color.White,
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)

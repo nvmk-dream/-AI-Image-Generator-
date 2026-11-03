@@ -82,6 +82,7 @@ import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
 import com.example.ai.OnnxModelManager
 import com.example.ai.RealDeviceAndModelMetrics
+import com.example.data.ActiveDiffusionEngine
 import com.example.data.AppLanguage
 import com.example.data.AppPreferencesState
 import com.example.ui.components.CircularGlowIconButton
@@ -239,8 +240,8 @@ fun SettingsScreen(
 
                 SettingsDivider(darkTheme)
 
-                val isReady = metrics.ortRuntimeAvailable && metrics.isTxt2ImgReady
-                val hasIncomplete = metrics.incompleteSlots.isNotEmpty()
+                val isReady = metrics.ortRuntimeAvailable && metrics.isTxt2ImgReadyFor(preferences.activeEngine)
+                val engineShort = if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) "Fast LCM" else "Standard SD"
                 SettingsRowItem(
                     icon = Icons.Filled.CheckCircle,
                     iconTint = if (isReady) NeonReadyGreen else SoftAmberStatus,
@@ -263,10 +264,10 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(5.dp))
                         Text(
-                            text = when {
-                                isReady -> "Ready (ONNX)"
-                                hasIncomplete -> "Missing Weights (Tap)"
-                                else -> "${metrics.installedCount}/4 Models (Tap)"
+                            text = if (isReady) {
+                                "Ready ($engineShort)"
+                            } else {
+                                "${metrics.coreInstalledCount}/8 Slots (Tap)"
                             },
                             color = primaryTextColor,
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)

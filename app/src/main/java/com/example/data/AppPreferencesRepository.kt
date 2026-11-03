@@ -31,6 +31,16 @@ enum class ContentSafetyMode(val key: String) {
     }
 }
 
+enum class ActiveDiffusionEngine(val key: String) {
+    FAST_LCM("fast_lcm"),
+    STANDARD_SD("standard_sd");
+
+    companion object {
+        fun fromKey(key: String?): ActiveDiffusionEngine =
+            entries.firstOrNull { it.key == key } ?: FAST_LCM
+    }
+}
+
 data class CustomContentCategories(
     val fashionGlamour: Boolean = true,
     val swimwearBeach: Boolean = true,
@@ -50,6 +60,7 @@ object ContentSafetyDefaults {
 }
 
 data class AppPreferencesState(
+    val activeEngine: ActiveDiffusionEngine = ActiveDiffusionEngine.FAST_LCM,
     val resolution: String = "512 × 512",
     val inferenceMode: String = "CPU (Auto)",
     val offlineMode: Boolean = true,
@@ -79,6 +90,7 @@ data class AppPreferencesState(
 class AppPreferencesRepository(private val context: Context) {
 
     private object Keys {
+        val ACTIVE_ENGINE = stringPreferencesKey("active_diffusion_engine")
         val RESOLUTION = stringPreferencesKey("resolution")
         val INFERENCE_MODE = stringPreferencesKey("inference_mode")
         val OFFLINE_MODE = booleanPreferencesKey("offline_mode")
@@ -100,6 +112,7 @@ class AppPreferencesRepository(private val context: Context) {
 
     val preferencesFlow: Flow<AppPreferencesState> = context.appDataStore.data.map { prefs ->
         AppPreferencesState(
+            activeEngine = ActiveDiffusionEngine.fromKey(prefs[Keys.ACTIVE_ENGINE]),
             resolution = prefs[Keys.RESOLUTION] ?: "512 × 512",
             inferenceMode = prefs[Keys.INFERENCE_MODE] ?: "CPU (Auto)",
             offlineMode = prefs[Keys.OFFLINE_MODE] ?: true,
@@ -119,6 +132,10 @@ class AppPreferencesRepository(private val context: Context) {
                 ?: ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT,
             savedUserImagePrompt = prefs[Keys.SAVED_USER_IMAGE_PROMPT] ?: ""
         )
+    }
+
+    suspend fun setActiveEngine(engine: ActiveDiffusionEngine) {
+        context.appDataStore.edit { it[Keys.ACTIVE_ENGINE] = engine.key }
     }
 
     suspend fun setResolution(value: String) {
