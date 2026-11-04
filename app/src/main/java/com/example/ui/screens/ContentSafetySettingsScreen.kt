@@ -25,6 +25,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Save
@@ -73,6 +75,8 @@ fun ContentSafetySettingsScreen(
     onSelectModePreset: (ContentSafetyMode, String) -> Unit,
     onSaveContentSafetyPrompt: (String) -> Unit,
     onResetContentSafetyPrompt: () -> Unit,
+    onAddBlockedTerm: (String) -> Unit,
+    onRemoveBlockedTerm: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
@@ -354,6 +358,17 @@ fun ContentSafetySettingsScreen(
                 }
             }
 
+            // My Block Words Card (user can only ADD extra blocks; built-in blocks always stay on)
+            MyBlockWordsCard(
+                darkTheme = darkTheme,
+                isTamil = isTamil,
+                primaryColor = primaryColor,
+                subColor = subColor,
+                terms = preferences.userBlockedTerms,
+                onAdd = onAddBlockedTerm,
+                onRemove = onRemoveBlockedTerm
+            )
+
             // Live Final Generation Input Preview Card
             FrostedGlassCard(darkTheme = darkTheme) {
                 Text(
@@ -390,6 +405,93 @@ fun ContentSafetySettingsScreen(
             }
 
             Spacer(modifier = Modifier.height(14.dp))
+        }
+    }
+}
+
+@Composable
+private fun MyBlockWordsCard(
+    darkTheme: Boolean,
+    isTamil: Boolean,
+    primaryColor: Color,
+    subColor: Color,
+    terms: List<String>,
+    onAdd: (String) -> Unit,
+    onRemove: (String) -> Unit
+) {
+    var newWord by rememberSaveable { mutableStateOf("") }
+    FrostedGlassCard(darkTheme = darkTheme) {
+        Text(
+            text = if (isTamil) "My Block Words (நீங்க சேர்க்கும் block words)" else "My Block Words",
+            color = primaryColor,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = if (isTamil) {
+                "இங்க சேர்க்கும் words prompt-ல வந்தா image generate ஆகாது. Built-in safety blocks எப்பவும் ON."
+            } else {
+                "Prompts containing these words will be blocked. Built-in safety blocks always stay on."
+            },
+            color = subColor,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = newWord,
+                onValueChange = { newWord = it },
+                singleLine = true,
+                placeholder = { Text(if (isTamil) "புது word..." else "New word...") },
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("block_word_input")
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            SafetyActionButton(
+                label = "Add",
+                icon = Icons.Filled.Add,
+                gradient = listOf(PinkGlowStart, PinkGlowEnd),
+                testTag = "block_word_add_button",
+                onClick = {
+                    if (newWord.isNotBlank()) {
+                        onAdd(newWord)
+                        newWord = ""
+                    }
+                }
+            )
+        }
+        if (terms.isEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = if (isTamil) "இன்னும் எந்த word-உம் சேர்க்கலை." else "No words added yet.",
+                color = subColor,
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+        terms.forEach { term ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp)
+            ) {
+                Text(
+                    text = term,
+                    color = primaryColor,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "Remove $term",
+                    tint = VibrantPinkPill,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .clickable { onRemove(term) }
+                        .testTag("block_word_remove_$term")
+                )
+            }
         }
     }
 }

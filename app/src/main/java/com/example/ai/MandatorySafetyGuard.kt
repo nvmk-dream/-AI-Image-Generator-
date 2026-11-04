@@ -27,6 +27,13 @@ object MandatorySafetyGuard {
         "சம்மதமில்லாத", "பாலியல் வன்கொடுமை", "தற்கொலை"
     )
 
+    /** Extra words the user added in Settings → Content Safety. Only adds blocks, never removes built-in ones. */
+    @Volatile
+    var userExtraBlockedTerms: List<String> = emptyList()
+
+    private fun firstMatch(text: String, terms: List<String>): String? =
+        terms.firstOrNull { term -> containsWholeTerm(text, term) }
+
     data class CheckResult(
         val allowed: Boolean,
         val messageEn: String? = null
@@ -64,26 +71,39 @@ object MandatorySafetyGuard {
             .replace(ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT, " ", ignoreCase = true)
             .lowercase(Locale.US)
 
-        if (prohibitedCoreTerms.any { term -> containsWholeTerm(stripped, term) }) {
+        firstMatch(stripped, prohibitedCoreTerms)?.let { term ->
             return CheckResult(
                 allowed = false,
-                messageEn = "Please adjust your prompt and try again."
+                messageEn = "Blocked: the word \"$term\" is not allowed. " +
+                    "(\"$term\" என்ற வார்த்தைக்கு அனுமதி இல்லை.) Please change it and try again."
             )
         }
 
-        val mentionsMinor = minorIndicators.any { word -> containsWholeTerm(stripped, word) }
-
-        if (mentionsMinor && minorUnsafeIntimateIndicators.any { term -> containsWholeTerm(stripped, term) }) {
+        val minorWord = firstMatch(stripped, minorIndicators)
+        val intimateWord = minorWord?.let { firstMatch(stripped, minorUnsafeIntimateIndicators) }
+        if (minorWord != null && intimateWord != null) {
             return CheckResult(
                 allowed = false,
-                messageEn = "Please adjust your prompt and try again."
+                messageEn = "Blocked: \"$minorWord\" (child word) + \"$intimateWord\" came together. " +
+                    "(குழந்தை வார்த்தை + உடல் சார்ந்த வார்த்தை ஒன்றாக வந்ததால் block.) Please change one of them."
             )
         }
 
-        if (hasRealPersonReferencePhoto && explicitNudityIndicators.any { term -> containsWholeTerm(stripped, term) }) {
+        if (hasRealPersonReferencePhoto) {
+            firstMatch(stripped, explicitNudityIndicators)?.let { term ->
+                return CheckResult(
+                    allowed = false,
+                    messageEn = "Blocked: \"$term\" is not allowed with an uploaded real photo. " +
+                        "(Upload செய்த photo-வுடன் \"$term\" அனுமதி இல்லை.) Please change it and try again."
+                )
+            }
+        }
+
+        firstMatch(stripped, userExtraBlockedTerms)?.let { term ->
             return CheckResult(
                 allowed = false,
-                messageEn = "Please adjust your prompt and try again."
+                messageEn = "Blocked by your own block list: \"$term\". " +
+                    "(நீங்க சேர்த்த block word.) Remove it in Settings → Content Safety → My Block Words."
             )
         }
 

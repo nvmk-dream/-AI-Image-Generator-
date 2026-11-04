@@ -15,6 +15,7 @@ import com.example.ai.DiffusionModelSlot
 import com.example.ai.GenerationProgress
 import com.example.ai.ImageBitmapPreprocessor
 import com.example.ai.ImageEditorAdjustments
+import com.example.ai.MandatorySafetyGuard
 import com.example.ai.MaskBrushStroke
 import com.example.ai.MediaPipeAvatarVisionEngine
 import com.example.ai.OfflineImageEditorEngine
@@ -161,6 +162,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val diffusionEngine = OnnxDiffusionEngine(application, modelManager)
     private val avatarVisionEngine = MediaPipeAvatarVisionEngine(application, modelManager)
 
+    init {
+        // Keep the safety guard in sync with the user's own block words from Settings
+        viewModelScope.launch {
+            prefsRepo.preferencesFlow.collect { MandatorySafetyGuard.userExtraBlockedTerms = it.userBlockedTerms }
+        }
+    }
+
     private var activeGenerationJob: Job? = null
     private var activeAutoDownloadJob: Job? = null
     private var activeMaskPreviewJob: Job? = null
@@ -306,6 +314,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             transientState.update { it.copy(statusToastMessage = "Content Safety Prompt reset to default.") }
         }
     }
+
+    fun addUserBlockedTerm(term: String) = viewModelScope.launch { prefsRepo.addUserBlockedTerm(term) }
+    fun removeUserBlockedTerm(term: String) = viewModelScope.launch { prefsRepo.removeUserBlockedTerm(term) }
 
     fun selectSafetyModePreset(mode: ContentSafetyMode, templatePrompt: String) {
         viewModelScope.launch {

@@ -332,7 +332,9 @@ fun ImageGeneratorRoot(
                                 onToggleContentFilter = appViewModel::setContentFilterEnabled,
                                 onSelectModePreset = appViewModel::selectSafetyModePreset,
                                 onSaveContentSafetyPrompt = appViewModel::saveContentSafetyPrompt,
-                                onResetContentSafetyPrompt = appViewModel::resetContentSafetyPrompt
+                                onResetContentSafetyPrompt = appViewModel::resetContentSafetyPrompt,
+                                onAddBlockedTerm = { appViewModel.addUserBlockedTerm(it) },
+                                onRemoveBlockedTerm = { appViewModel.removeUserBlockedTerm(it) }
                             )
 
                             ActiveScreen.TEXT_TO_IMAGE -> TextToImageScreen(

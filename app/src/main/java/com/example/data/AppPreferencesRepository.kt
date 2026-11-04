@@ -86,6 +86,7 @@ data class AppPreferencesState(
     val customCategories: CustomContentCategories = CustomContentCategories(),
     val savedContentSafetyPrompt: String = ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT,
     val savedUserImagePrompt: String = "",
+    val userBlockedTerms: List<String> = emptyList(),
     val firstLaunchDownloadPromptHandled: Boolean = false,
     val isLoadedFromDisk: Boolean = false
 ) {
@@ -124,6 +125,7 @@ class AppPreferencesRepository(private val context: Context) {
         // Strictly separate keys so User Prompt and Content Safety Prompt never overwrite each other
         val SAVED_CONTENT_SAFETY_PROMPT = stringPreferencesKey("saved_content_safety_prompt")
         val SAVED_USER_IMAGE_PROMPT = stringPreferencesKey("saved_user_image_prompt")
+        val USER_BLOCKED_TERMS = stringPreferencesKey("user_blocked_terms")
         val FIRST_LAUNCH_DOWNLOAD_PROMPT_HANDLED = booleanPreferencesKey("first_launch_download_prompt_handled")
     }
 
@@ -148,6 +150,7 @@ class AppPreferencesRepository(private val context: Context) {
             savedContentSafetyPrompt = prefs[Keys.SAVED_CONTENT_SAFETY_PROMPT]
                 ?: ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT,
             savedUserImagePrompt = prefs[Keys.SAVED_USER_IMAGE_PROMPT] ?: "",
+            userBlockedTerms = decodeTerms(prefs[Keys.USER_BLOCKED_TERMS]),
             firstLaunchDownloadPromptHandled = prefs[Keys.FIRST_LAUNCH_DOWNLOAD_PROMPT_HANDLED] ?: false,
             isLoadedFromDisk = true
         )
@@ -198,6 +201,25 @@ class AppPreferencesRepository(private val context: Context) {
     suspend fun resetContentSafetyPrompt() {
         context.appDataStore.edit { prefs ->
             prefs[Keys.SAVED_CONTENT_SAFETY_PROMPT] = ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT
+        }
+    }
+
+    private fun decodeTerms(raw: String?): List<String> =
+        raw.orEmpty().split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+
+    suspend fun addUserBlockedTerm(term: String) {
+        val clean = term.trim().lowercase()
+        if (clean.isEmpty()) return
+        context.appDataStore.edit { prefs ->
+            val current = decodeTerms(prefs[Keys.USER_BLOCKED_TERMS])
+            if (clean !in current) prefs[Keys.USER_BLOCKED_TERMS] = (current + clean).joinToString("\n")
+        }
+    }
+
+    suspend fun removeUserBlockedTerm(term: String) {
+        context.appDataStore.edit { prefs ->
+            val current = decodeTerms(prefs[Keys.USER_BLOCKED_TERMS])
+            prefs[Keys.USER_BLOCKED_TERMS] = (current - term).joinToString("\n")
         }
     }
 
