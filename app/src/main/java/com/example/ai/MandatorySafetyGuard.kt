@@ -11,20 +11,20 @@ object MandatorySafetyGuard {
         "குழந்தை", "சிறுவன்", "சிறுமி", "சிறார்", "பள்ளிப் பெண்"
     )
 
-    private val explicitNudityIndicators = listOf(
+    // Keep only the two strict code-level blocks requested by the app owner:
+    // 1) child-focused sexual content
+    // 2) violence / gore / harmful attack content
+    private val childSexualIndicators = listOf(
         "nude", "naked", "nsfw", "explicit", "erotic", "porn", "pornography",
-        "நிர்வாண", "ஆபாச"
-    )
-
-    private val minorUnsafeIntimateIndicators = explicitNudityIndicators + listOf(
         "sexual", "topless", "undress", "lingerie", "bikini", "seductive", "sensual",
-        "காம", "பாலியல்"
+        "நிர்வாண", "ஆபாச", "காம", "பாலியல்"
     )
 
-    private val prohibitedCoreTerms = listOf(
-        "csam", "child porn", "non-consensual", "revenge porn", "deepfake porn",
-        "without consent", "rape", "sexual assault", "self-harm", "suicide", "terrorist attack",
-        "சம்மதமில்லாத", "பாலியல் வன்கொடுமை", "தற்கொலை"
+    private val violenceIndicators = listOf(
+        "murder", "kill", "killing", "massacre", "bomb", "explosion", "attack", "terrorist",
+        "shooting", "stab", "stabbing", "behead", "decapitate", "bloodbath", "gore",
+        "self-harm", "suicide", "assault", "rape", "violent", "weapon attack",
+        "கொலை", "தற்கொலை", "சுட்டுக் கொலை", "வன்முறை", "போர்", "தாக்குதல்", "படுகொலை"
     )
 
     /** Extra words the user added in Settings → Content Safety. Only adds blocks, never removes built-in ones. */
@@ -40,8 +40,7 @@ object MandatorySafetyGuard {
     )
 
     /**
-     * Whole-word / whole-phrase matcher so normal English or Tamil-translated DSLR & fashion words
-     * (e.g., "drape", "trapezius", "striped", "pinstripe", "unisex", "shirtless", "infantry")
+     * Whole-word / whole-phrase matcher so normal English or Tamil-translated fashion words
      * never falsely collide with substrings like "rape", "strip", "sex", or "infant".
      */
     internal fun containsWholeTerm(normalizedLowerText: String, term: String): Boolean {
@@ -50,7 +49,6 @@ object MandatorySafetyGuard {
 
         val hasTamilScript = cleanTerm.any { it.code in 0x0B80..0x0BFF }
         return if (hasTamilScript) {
-            // Match at Tamil word start boundary (ignoring preceding spaces/punctuation)
             val pattern = Regex("""(?<![\u0B80-\u0BFF])${Regex.escape(cleanTerm)}""")
             pattern.containsMatchIn(normalizedLowerText)
         } else {
@@ -65,39 +63,29 @@ object MandatorySafetyGuard {
     ): CheckResult {
         if (userPrompt.isBlank()) return CheckResult(allowed = true)
 
-        // Strip built-in safety disclaimer templates first so safety boilerplate never self-triggers
         val stripped = userPrompt
             .replace(ContentSafetyDefaults.STRICT_TEMPLATE_PROMPT, " ", ignoreCase = true)
             .replace(ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT, " ", ignoreCase = true)
             .replace(ContentSafetyDefaults.ADULT_OPEN_TEMPLATE_PROMPT, " ", ignoreCase = true)
             .lowercase(Locale.US)
 
-        firstMatch(stripped, prohibitedCoreTerms)?.let { term ->
-            return CheckResult(
-                allowed = false,
-                messageEn = "Blocked: the word \"$term\" is not allowed. " +
-                    "(\"$term\" என்ற வார்த்தைக்கு அனுமதி இல்லை.) Please change it and try again."
-            )
-        }
-
         val minorWord = firstMatch(stripped, minorIndicators)
-        val intimateWord = minorWord?.let { firstMatch(stripped, minorUnsafeIntimateIndicators) }
-        if (minorWord != null && intimateWord != null) {
+        val childSexualWord = minorWord?.let { firstMatch(stripped, childSexualIndicators) }
+        if (minorWord != null && childSexualWord != null) {
             return CheckResult(
                 allowed = false,
-                messageEn = "Blocked: \"$minorWord\" (child word) + \"$intimateWord\" came together. " +
-                    "(குழந்தை வார்த்தை + உடல் சார்ந்த வார்த்தை ஒன்றாக வந்ததால் block.) Please change one of them."
+                messageEn = "Blocked: child-focused sexual content is not allowed. " +
+                    "(குழந்தை சார்ந்த பாலியல் / நிர்வாண / erotic உள்ளடக்கம் தடுக்கப்பட்டது.) Please change it and try again."
             )
         }
 
-        if (hasRealPersonReferencePhoto) {
-            firstMatch(stripped, explicitNudityIndicators)?.let { term ->
-                return CheckResult(
-                    allowed = false,
-                    messageEn = "Blocked: \"$term\" is not allowed with an uploaded real photo. " +
-                        "(Upload செய்த photo-வுடன் \"$term\" அனுமதி இல்லை.) Please change it and try again."
-                )
-            }
+        val violentWord = firstMatch(stripped, violenceIndicators)
+        if (violentWord != null) {
+            return CheckResult(
+                allowed = false,
+                messageEn = "Blocked: violent / harmful / gore content is not allowed. " +
+                    "(வன்முறை / தாக்குதல் / கொலை / தற்கொலை / இரத்தம் கொண்ட உள்ளடக்கம் தடுக்கப்பட்டது.) Please change it and try again."
+            )
         }
 
         firstMatch(stripped, userExtraBlockedTerms)?.let { term ->
