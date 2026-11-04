@@ -80,6 +80,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
+import com.example.ai.OfflineTamilPromptTranslator
 import com.example.ai.OnnxModelManager
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.data.ActiveDiffusionEngine
@@ -89,6 +90,7 @@ import com.example.ui.components.CircularGlowIconButton
 import com.example.ui.components.FrostedGlassCard
 import com.example.ui.components.OnnxDownloadLinksCard
 import com.example.ui.components.PaletteAppLogo
+import com.example.ui.components.TamilDictionaryCard
 import com.example.ui.theme.CyanVersionAccent
 import com.example.ui.theme.DeepPlumText
 import com.example.ui.theme.NeonReadyGreen
@@ -114,6 +116,9 @@ fun SettingsScreen(
     onContentFilterToggle: (Boolean) -> Unit,
     onClearCache: () -> Unit,
     onUnloadRam: () -> Unit,
+    onUpsertTamilWord: (String, String) -> Unit = { _, _ -> },
+    onDeleteTamilWord: (String) -> Unit = {},
+    onResetTamilDictionary: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
@@ -297,7 +302,7 @@ fun SettingsScreen(
                     iconTint = Color(0xFF3F51B5),
                     label = "Resolution",
                     selectedValue = preferences.resolution,
-                    options = listOf("384 × 384", "512 × 512", "640 × 640", "768 × 768"),
+                    options = listOf("384 × 384", "512 × 512", "448 × 640", "512 × 768", "640 × 640", "768 × 768"),
                     textColor = primaryTextColor,
                     darkTheme = darkTheme,
                     testTag = "dropdown_resolution",
@@ -413,6 +418,15 @@ fun SettingsScreen(
                     )
                 }
             }
+
+            // 2B. Editable Tamil → English dictionary
+            TamilDictionaryCard(
+                darkTheme = darkTheme,
+                entries = preferences.tamilDictionary ?: OfflineTamilPromptTranslator.defaultPhraseMap,
+                onUpsert = onUpsertTamilWord,
+                onDelete = onDeleteTamilWord,
+                onReset = onResetTamilDictionary
+            )
 
             // 3. Storage & Cache Card
             FrostedGlassCard(darkTheme = darkTheme) {

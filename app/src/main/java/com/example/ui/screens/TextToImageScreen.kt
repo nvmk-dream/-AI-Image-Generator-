@@ -64,13 +64,17 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.example.ai.AutoQuality
 import com.example.ai.GenerationProgress
+import com.example.ai.OfflineTamilPromptTranslator
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.ai.SamplerType
 import com.example.data.ActiveDiffusionEngine
 import com.example.data.AppPreferencesState
 import com.example.data.GeneratedCreation
 import com.example.ui.components.ActiveEngineSwitchCard
+import com.example.ui.components.AutoQualityCard
+import com.example.ui.components.TamilPromptPreview
 import com.example.ui.components.CircularGlowIconButton
 import com.example.ui.components.FrostedGlassCard
 import com.example.ui.theme.DeepPlumText
@@ -99,6 +103,8 @@ fun TextToImageScreen(
     onQuickSwitchToFastLcmFolder: () -> Unit = {},
     onSelectEngine: (ActiveDiffusionEngine) -> Unit = {},
     onResolutionChange: (String) -> Unit = {},
+    onAutoQualityChange: (Boolean) -> Unit = {},
+    onAddTamilWord: (String, String) -> Unit = { _, _ -> },
     onUserPromptChange: (String) -> Unit,
     onGenerate: (sampler: SamplerType, steps: Int, guidanceScale: Float, seed: Long, negativePrompt: String) -> Unit,
     onCancelGeneration: () -> Unit,
@@ -201,7 +207,7 @@ fun TextToImageScreen(
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold)
                     )
                     Text(
-                        text = "${preferences.resolution} • ${preferences.inferenceMode} • Batch 1",
+                        text = "${if (preferences.autoQuality) "${AutoQuality.RESOLUTION} (Auto)" else preferences.resolution} • ${preferences.inferenceMode} • Batch 1",
                         color = subColor,
                         style = MaterialTheme.typography.bodyMedium
                     )
@@ -232,19 +238,25 @@ fun TextToImageScreen(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
                 ) {
                     Text(
                         text = if (isTamil) "வேகம் / அளவு:" else "Speed / Size:",
                         color = subColor,
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
                     )
-                    listOf("384 × 384" to "⚡ 384×384 Fast", "512 × 512" to "✨ 512×512 HD").forEach { (resVal, resLabel) ->
-                        val activeRes = preferences.resolution == resVal
+                    listOf(
+                        "384 × 384" to "⚡ 384×384 Fast",
+                        "512 × 512" to "✨ 512×512 HD",
+                        "448 × 640" to "📱 448×640 Tall",
+                        "512 × 768" to "🧍 512×768 Full Body"
+                    ).forEach { (resVal, resLabel) ->
+                        val activeRes = !preferences.autoQuality && preferences.resolution == resVal
                         Box(
                             contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .weight(1f)
                                 .minimumInteractiveComponentSize()
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(
@@ -260,7 +272,11 @@ fun TextToImageScreen(
                                     }
                                 )
                                 .border(1.dp, Color.White.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
-                                .clickable(enabled = !isGenerating) { onResolutionChange(resVal) }
+                                .clickable(enabled = !isGenerating) {
+                                    // Picking a size manually switches Auto off
+                                    onResolutionChange(resVal)
+                                    if (preferences.autoQuality) onAutoQualityChange(false)
+                                }
                                 .padding(vertical = 6.dp, horizontal = 8.dp)
                                 .testTag("quick_res_${resVal.substringBefore(" ")}")
                         ) {
@@ -351,6 +367,14 @@ fun TextToImageScreen(
                         .testTag("user_image_prompt_input")
                 )
 
+                TamilPromptPreview(
+                    prompt = userPrompt,
+                    dictionary = preferences.tamilDictionary ?: OfflineTamilPromptTranslator.defaultPhraseMap,
+                    darkTheme = darkTheme,
+                    onAddWord = onAddTamilWord,
+                    testTagPrefix = "txt2img"
+                )
+
                 if (showSafetyCombinedPreview) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(
@@ -385,6 +409,15 @@ fun TextToImageScreen(
                     }
                 }
             }
+
+            AutoQualityCard(
+                darkTheme = darkTheme,
+                auto = preferences.autoQuality,
+                summary = "Size ${AutoQuality.RESOLUTION} (முழு உருவம்) • Steps ${AutoQuality.LCM_STEPS} (Fast LCM)",
+                enabled = !isGenerating,
+                onToggle = onAutoQualityChange,
+                testTag = "txt2img_auto_quality_switch"
+            )
 
             // 2. Fast LCM / Standard Euler Controls Card
             FrostedGlassCard(darkTheme = darkTheme) {
@@ -446,7 +479,7 @@ fun TextToImageScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Steps: $steps",
+                        text = if (preferences.autoQuality && selectedSampler == SamplerType.LCM_FAST) "Steps: Auto (${AutoQuality.LCM_STEPS})" else "Steps: $steps",
                         color = textColor,
                         style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                         modifier = Modifier.weight(1f)
@@ -468,12 +501,14 @@ fun TextToImageScreen(
                     }
                 }
 
-                Slider(
-                    value = steps.toFloat(),
-                    onValueChange = { steps = it.toInt() },
-                    enabled = !isGenerating,
-                    valueRange = if (selectedSampler == SamplerType.LCM_FAST) 4f..10f else 10f..25f
-                )
+                if (!preferences.autoQuality) {
+                    Slider(
+                        value = steps.toFloat(),
+                        onValueChange = { steps = it.toInt() },
+                        enabled = !isGenerating,
+                        valueRange = if (selectedSampler == SamplerType.LCM_FAST) 4f..10f else 10f..25f
+                    )
+                }
 
                 // Generate or Cancel Button
                 val modelsReady = metrics.isTxt2ImgReadyFor(preferences.activeEngine)

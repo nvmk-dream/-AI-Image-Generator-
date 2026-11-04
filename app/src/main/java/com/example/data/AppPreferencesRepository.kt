@@ -95,6 +95,9 @@ data class AppPreferencesState(
     val savedUserImagePrompt: String = "",
     val userBlockedTerms: List<String> = emptyList(),
     val imageNegativePrompt: String = ContentSafetyDefaults.DEFAULT_IMAGE_NEGATIVE_PROMPT,
+    /** null = default Tamil dictionary */
+    val tamilDictionary: List<Pair<String, String>>? = null,
+    val autoQuality: Boolean = true,
     val firstLaunchDownloadPromptHandled: Boolean = false,
     val isLoadedFromDisk: Boolean = false
 ) {
@@ -135,6 +138,8 @@ class AppPreferencesRepository(private val context: Context) {
         val SAVED_USER_IMAGE_PROMPT = stringPreferencesKey("saved_user_image_prompt")
         val USER_BLOCKED_TERMS = stringPreferencesKey("user_blocked_terms")
         val IMAGE_NEGATIVE_PROMPT = stringPreferencesKey("image_negative_prompt")
+        val TAMIL_DICTIONARY = stringPreferencesKey("tamil_dictionary")
+        val AUTO_QUALITY = booleanPreferencesKey("auto_quality")
         val FIRST_LAUNCH_DOWNLOAD_PROMPT_HANDLED = booleanPreferencesKey("first_launch_download_prompt_handled")
     }
 
@@ -161,6 +166,8 @@ class AppPreferencesRepository(private val context: Context) {
             savedUserImagePrompt = prefs[Keys.SAVED_USER_IMAGE_PROMPT] ?: "",
             userBlockedTerms = decodeTerms(prefs[Keys.USER_BLOCKED_TERMS]),
             imageNegativePrompt = prefs[Keys.IMAGE_NEGATIVE_PROMPT] ?: ContentSafetyDefaults.DEFAULT_IMAGE_NEGATIVE_PROMPT,
+            tamilDictionary = prefs[Keys.TAMIL_DICTIONARY]?.let(::decodeDictionary),
+            autoQuality = prefs[Keys.AUTO_QUALITY] ?: true,
             firstLaunchDownloadPromptHandled = prefs[Keys.FIRST_LAUNCH_DOWNLOAD_PROMPT_HANDLED] ?: false,
             isLoadedFromDisk = true
         )
@@ -222,6 +229,27 @@ class AppPreferencesRepository(private val context: Context) {
         context.appDataStore.edit { prefs ->
             prefs[Keys.IMAGE_NEGATIVE_PROMPT] = ContentSafetyDefaults.DEFAULT_IMAGE_NEGATIVE_PROMPT
         }
+    }
+
+    private fun decodeDictionary(raw: String): List<Pair<String, String>> =
+        raw.split('\n').mapNotNull { line ->
+            val parts = line.split('\t', limit = 2)
+            if (parts.size == 2 && parts[0].isNotBlank()) parts[0] to parts[1] else null
+        }
+
+    suspend fun saveTamilDictionary(entries: List<Pair<String, String>>) {
+        fun clean(v: String) = v.replace('\t', ' ').replace('\n', ' ').trim()
+        context.appDataStore.edit { prefs ->
+            prefs[Keys.TAMIL_DICTIONARY] = entries.joinToString("\n") { "${clean(it.first)}\t${clean(it.second)}" }
+        }
+    }
+
+    suspend fun resetTamilDictionary() {
+        context.appDataStore.edit { prefs -> prefs.remove(Keys.TAMIL_DICTIONARY) }
+    }
+
+    suspend fun setAutoQuality(enabled: Boolean) {
+        context.appDataStore.edit { prefs -> prefs[Keys.AUTO_QUALITY] = enabled }
     }
 
     private fun decodeTerms(raw: String?): List<String> =

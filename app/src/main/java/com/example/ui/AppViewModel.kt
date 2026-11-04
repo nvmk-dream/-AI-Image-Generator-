@@ -15,7 +15,9 @@ import com.example.ai.DiffusionModelSlot
 import com.example.ai.GenerationProgress
 import com.example.ai.ImageBitmapPreprocessor
 import com.example.ai.ImageEditorAdjustments
+import com.example.ai.AutoQuality
 import com.example.ai.MandatorySafetyGuard
+import com.example.ai.OfflineTamilPromptTranslator
 import com.example.ai.MaskBrushStroke
 import com.example.ai.MediaPipeAvatarVisionEngine
 import com.example.ai.OfflineImageEditorEngine
@@ -165,7 +167,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // Keep the safety guard in sync with the user's own block words from Settings
         viewModelScope.launch {
-            prefsRepo.preferencesFlow.collect { MandatorySafetyGuard.userExtraBlockedTerms = it.userBlockedTerms }
+            prefsRepo.preferencesFlow.collect {
+                MandatorySafetyGuard.userExtraBlockedTerms = it.userBlockedTerms
+                OfflineTamilPromptTranslator.setUserDictionary(it.tamilDictionary)
+            }
         }
     }
 
@@ -329,6 +334,31 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun currentTamilDictionary(): List<Pair<String, String>> =
+        uiState.value.preferences.tamilDictionary ?: OfflineTamilPromptTranslator.defaultPhraseMap
+
+    fun upsertTamilWord(tamil: String, english: String) {
+        val updated = currentTamilDictionary().filterNot { it.first == tamil } + (tamil to english)
+        viewModelScope.launch {
+            prefsRepo.saveTamilDictionary(updated)
+            transientState.update { it.copy(statusToastMessage = "அகராதியில் சேர்க்கப்பட்டது: $tamil → $english") }
+        }
+    }
+
+    fun deleteTamilWord(tamil: String) {
+        val updated = currentTamilDictionary().filterNot { it.first == tamil }
+        viewModelScope.launch { prefsRepo.saveTamilDictionary(updated) }
+    }
+
+    fun resetTamilDictionary() {
+        viewModelScope.launch {
+            prefsRepo.resetTamilDictionary()
+            transientState.update { it.copy(statusToastMessage = "Tamil அகராதி reset to default.") }
+        }
+    }
+
+    fun setAutoQuality(enabled: Boolean) = viewModelScope.launch { prefsRepo.setAutoQuality(enabled) }
+
     fun addUserBlockedTerm(term: String) = viewModelScope.launch { prefsRepo.addUserBlockedTerm(term) }
     fun removeUserBlockedTerm(term: String) = viewModelScope.launch { prefsRepo.removeUserBlockedTerm(term) }
 
@@ -426,13 +456,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val finalGenerationInput = stateSnapshot.preferences.buildFinalGenerationInput(userPrompt)
+        // Auto (சிறந்தது): app picks tall size + steps (+ strength for Image-to-Image)
+        val auto = stateSnapshot.preferences.autoQuality
+        val effResolution = if (auto) AutoQuality.RESOLUTION else stateSnapshot.preferences.resolution
+        val effSteps = if (auto && stateSnapshot.preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) AutoQuality.LCM_STEPS else steps
 
         activeGenerationJob = viewModelScope.launch {
             transientState.update {
                 it.copy(
                     isGenerating = true,
                     generationErrorMessage = null,
-                    generationProgress = GenerationProgress("Preparing Offline ONNX Pipeline...", 0, steps, 2, 0L)
+                    generationProgress = GenerationProgress("Preparing Offline ONNX Pipeline...", 0, effSteps, 2, 0L)
                 )
             }
             val activeEngine = stateSnapshot.preferences.activeEngine
@@ -446,10 +480,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     userPrompt = userPrompt,
                     finalGenerationInput = finalGenerationInput,
                     negativePrompt = negativePrompt,
-                    resolutionLabel = stateSnapshot.preferences.resolution,
+                    resolutionLabel = effResolution,
                     inferenceMode = stateSnapshot.preferences.inferenceMode,
                     samplerType = effectiveSampler,
-                    steps = steps,
+                    steps = effSteps,
                     guidanceScale = guidanceScale,
                     seed = seed,
                     activeEngine = activeEngine,
@@ -525,13 +559,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val finalGenerationInput = stateSnapshot.preferences.buildFinalGenerationInput(userPrompt)
+        // Auto (சிறந்தது): app picks tall size + steps (+ strength for Image-to-Image)
+        val auto = stateSnapshot.preferences.autoQuality
+        val effResolution = if (auto) AutoQuality.RESOLUTION else stateSnapshot.preferences.resolution
+        val effSteps = if (auto && stateSnapshot.preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) AutoQuality.LCM_STEPS else steps
+        val effStrength = if (auto) AutoQuality.img2imgStrengthFor(userPrompt) else strength
 
         activeGenerationJob = viewModelScope.launch {
             transientState.update {
                 it.copy(
                     isGenerating = true,
                     generationErrorMessage = null,
-                    generationProgress = GenerationProgress("Preparing Offline Image-to-Image...", 0, steps, 2, 0L)
+                    generationProgress = GenerationProgress("Preparing Offline Image-to-Image...", 0, effSteps, 2, 0L)
                 )
             }
             val activeEngine = stateSnapshot.preferences.activeEngine
@@ -546,11 +585,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     userPrompt = userPrompt,
                     finalGenerationInput = finalGenerationInput,
                     negativePrompt = negativePrompt,
-                    strength = strength,
-                    resolutionLabel = stateSnapshot.preferences.resolution,
+                    strength = effStrength,
+                    resolutionLabel = effResolution,
                     inferenceMode = stateSnapshot.preferences.inferenceMode,
                     samplerType = effectiveSampler,
-                    steps = steps,
+                    steps = effSteps,
                     guidanceScale = guidanceScale,
                     seed = seed,
                     activeEngine = activeEngine,

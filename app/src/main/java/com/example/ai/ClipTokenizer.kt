@@ -12,7 +12,7 @@ import java.util.Locale
  */
 object OfflineTamilPromptTranslator {
 
-    private val phraseMap: List<Pair<String, String>> = listOf(
+    val defaultPhraseMap: List<Pair<String, String>> = listOf(
         // Core safety boilerplate phrases (stripped cleanly into concise English CLIP guidance so 77-token budget isn't wasted)
         "சட்டவிரோதமான தீங்கு விளைவிக்கும் உள்ளடக்கம்" to "",
         "குழந்தைகள் தொடர்பான பாலியல் உள்ளடக்கம்" to "",
@@ -107,8 +107,48 @@ object OfflineTamilPromptTranslator {
         "அரண்மனை" to "royal palace interior",
         "இரவு" to "night lighting bokeh",
         "பொக்கே" to "soft bokeh",
-        "தெளிவான புகைப்படம்" to "ultra detailed photorealistic portrait",
-        "புகைப்படம்" to "photorealistic portrait photography",
+        "தெளிவான புகைப்படம்" to "ultra detailed realistic photograph",
+        "புகைப்படம்" to "realistic photograph, DSLR photo",
+        // Full-body / pose / scene / outfit words (editable later in Settings → Tamil அகராதி)
+        "தலை முதல் கால் வரை" to "full body, head to toe",
+        "முழுநீளம்" to "full body shot, head to toe",
+        "முழுநீள" to "full body shot, head to toe",
+        "முழு நீள" to "full body shot, head to toe",
+        "முழு உடல்" to "full body shot, head to toe",
+        "முழு உருவம்" to "full body shot",
+        "அமர்ந்து" to "sitting",
+        "அமர்ந்த" to "sitting",
+        "நடக்கும்" to "walking",
+        "நடந்து" to "walking",
+        "நீண்ட முடி" to "long hair",
+        "சுருள் முடி" to "curly hair",
+        "நீண்ட" to "long",
+        "கோயில்" to "ancient temple",
+        "மாலை நேரம்" to "evening light",
+        "சூரிய ஒளி" to "warm sunlight",
+        "நிலா" to "moonlight",
+        "தெரு" to "street",
+        "நகரம்" to "city",
+        "வயல்" to "green paddy field",
+        "அறை" to "room interior",
+        "ஜன்னல்" to "window light",
+        "ஸ்டுடியோ" to "studio lighting",
+        "லெஹங்கா" to "embroidered lehenga choli",
+        "கவுன்" to "elegant evening gown",
+        "மேற்கத்திய உடை" to "western outfit",
+        "சேலை" to "indian saree",
+        "மணப்பெண்" to "indian bride in bridal attire",
+        "மல்லிகை பூ" to "jasmine flowers in hair",
+        "நகை" to "gold jewelry",
+        "ரோஜா" to "rose",
+        "உண்மையான" to "realistic",
+        "யதார்த்தமான" to "realistic",
+        "தத்ரூபமான" to "photorealistic",
+        "கேமரா" to "DSLR camera photo",
+        "கருப்பு வெள்ளை" to "black and white photo",
+        "முகம்" to "face",
+        "உடல்" to "body",
+        "கைகள்" to "hands",
         "ஓவியம்" to "artistic digital painting",
         "நகைகள்" to "delicate gold jewelry",
         "தங்க" to "golden",
@@ -126,11 +166,34 @@ object OfflineTamilPromptTranslator {
     fun containsTamil(text: String): Boolean =
         text.any { ch -> ch.code in 0x0B80..0x0BFF }
 
-    fun normalizeForClip(rawPrompt: String): String {
+    /** Longest Tamil phrase first, so "இளஞ்சிவப்பு" wins over "சிவப்பு" and "முழு உடல்" over "உடல்". */
+    private fun sortForMatching(list: List<Pair<String, String>>): List<Pair<String, String>> =
+        list.filter { it.first.isNotBlank() }.distinctBy { it.first }.sortedByDescending { it.first.length }
+
+    @Volatile
+    private var activeMap: List<Pair<String, String>> = sortForMatching(defaultPhraseMap)
+
+    /** null = use the default list. Called whenever Settings → Tamil அகராதி changes. */
+    fun setUserDictionary(entries: List<Pair<String, String>>?) {
+        activeMap = sortForMatching(entries ?: defaultPhraseMap)
+    }
+
+    private val tamilWordRegex = Regex("[\\u0B80-\\u0BFF]+")
+
+    /** Tamil words that are NOT in the dictionary (they would be dropped before reaching the AI). */
+    fun unknownTamilWords(rawPrompt: String, dictionary: List<Pair<String, String>>? = null): List<String> {
+        var working = rawPrompt
+        for ((ta, _) in dictionary?.let(::sortForMatching) ?: activeMap) {
+            working = working.replace(ta, " ", ignoreCase = true)
+        }
+        return tamilWordRegex.findAll(working).map { it.value }.distinct().toList()
+    }
+
+    fun normalizeForClip(rawPrompt: String, dictionary: List<Pair<String, String>>? = null): String {
         if (!containsTamil(rawPrompt)) return rawPrompt.trim()
 
         var working = rawPrompt
-        for ((ta, en) in phraseMap) {
+        for ((ta, en) in dictionary?.let(::sortForMatching) ?: activeMap) {
             if (working.contains(ta, ignoreCase = true)) {
                 working = working.replace(ta, " $en ", ignoreCase = true)
             }
@@ -149,7 +212,7 @@ object OfflineTamilPromptTranslator {
             .replace(Regex("\\s+"), " ")
             .replace(Regex("(,\\s*)+"), ", ")
             .trim(' ', ',', '.')
-            .ifBlank { "photorealistic portrait, soft studio lighting, high detail" }
+            .ifBlank { "realistic photograph, natural lighting, high detail" }
     }
 }
 

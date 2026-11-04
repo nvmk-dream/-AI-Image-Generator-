@@ -322,7 +322,10 @@ fun ImageGeneratorRoot(
                                 onNotificationsChange = appViewModel::setNotificationsEnabled,
                                 onContentFilterToggle = appViewModel::setContentFilterEnabled,
                                 onClearCache = appViewModel::clearCache,
-                                onUnloadRam = appViewModel::unloadAiFromRam
+                                onUnloadRam = appViewModel::unloadAiFromRam,
+                                onUpsertTamilWord = appViewModel::upsertTamilWord,
+                                onDeleteTamilWord = appViewModel::deleteTamilWord,
+                                onResetTamilDictionary = appViewModel::resetTamilDictionary
                             )
 
                             ActiveScreen.CONTENT_SAFETY_SETTINGS -> ContentSafetySettingsScreen(
@@ -359,6 +362,8 @@ fun ImageGeneratorRoot(
                                 onResolutionChange = appViewModel::setResolution,
                                 onUserPromptChange = appViewModel::updateUserImagePrompt,
                                 onGenerate = appViewModel::generateOfflineTextToImage,
+                                onAutoQualityChange = { appViewModel.setAutoQuality(it) },
+                                onAddTamilWord = appViewModel::upsertTamilWord,
                                 onCancelGeneration = appViewModel::cancelGeneration,
                                 onExportToGallery = appViewModel::exportCreationToGallery,
                                 onToggleFavorite = appViewModel::toggleFavoriteCreation,
@@ -387,6 +392,8 @@ fun ImageGeneratorRoot(
                                 },
                                 onUserPromptChange = appViewModel::updateUserImagePrompt,
                                 onGenerateImg2Img = appViewModel::generateOfflineImageToImage,
+                                onAutoQualityChange = { appViewModel.setAutoQuality(it) },
+                                onAddTamilWord = appViewModel::upsertTamilWord,
                                 onCancelGeneration = appViewModel::cancelGeneration,
                                 onExportToGallery = appViewModel::exportCreationToGallery,
                                 onToggleFavorite = appViewModel::toggleFavoriteCreation,

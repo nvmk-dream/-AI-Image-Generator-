@@ -65,13 +65,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.example.ai.AutoQuality
 import com.example.ai.GenerationProgress
+import com.example.ai.OfflineTamilPromptTranslator
 import com.example.ai.RealDeviceAndModelMetrics
 import com.example.ai.SamplerType
 import com.example.data.ActiveDiffusionEngine
 import com.example.data.AppPreferencesState
 import com.example.data.GeneratedCreation
 import com.example.ui.components.ActiveEngineSwitchCard
+import com.example.ui.components.AutoQualityCard
+import com.example.ui.components.TamilPromptPreview
 import com.example.ui.components.CircularGlowIconButton
 import com.example.ui.components.FrostedGlassCard
 import com.example.ui.theme.DeepPlumText
@@ -105,6 +109,8 @@ fun ImageToImageScreen(
     onSelectEngine: (ActiveDiffusionEngine) -> Unit = {},
     onPickReferencePhoto: () -> Unit,
     onUserPromptChange: (String) -> Unit,
+    onAutoQualityChange: (Boolean) -> Unit = {},
+    onAddTamilWord: (String, String) -> Unit = { _, _ -> },
     onGenerateImg2Img: (
         sampler: SamplerType,
         strength: Float,
@@ -420,6 +426,14 @@ fun ImageToImageScreen(
                         .testTag("img2img_prompt_input")
                 )
 
+                TamilPromptPreview(
+                    prompt = userPrompt,
+                    dictionary = preferences.tamilDictionary ?: OfflineTamilPromptTranslator.defaultPhraseMap,
+                    darkTheme = darkTheme,
+                    onAddWord = onAddTamilWord,
+                    testTagPrefix = "img2img"
+                )
+
                 if (showSafetyCombinedPreview) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(
@@ -455,8 +469,18 @@ fun ImageToImageScreen(
                 }
             }
 
+            AutoQualityCard(
+                darkTheme = darkTheme,
+                auto = preferences.autoQuality,
+                summary = "Size ${AutoQuality.RESOLUTION} • Steps ${AutoQuality.LCM_STEPS} • மாற்றம் ${(AutoQuality.img2imgStrengthFor(userPrompt) * 100f).roundToInt()}% (உடை மாற்றம் 55%, style மாற்றம் 75%)",
+                enabled = !isGenerating,
+                onToggle = onAutoQualityChange,
+                testTag = "img2img_auto_quality_switch"
+            )
+
             // 3. Strength Slider + Sampler + Steps + Generate/Cancel Card
             FrostedGlassCard(darkTheme = darkTheme) {
+              if (!preferences.autoQuality) {
                 val strengthPct = (strength * 100f).roundToInt()
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -498,6 +522,7 @@ fun ImageToImageScreen(
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
+              }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
@@ -560,7 +585,7 @@ fun ImageToImageScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Steps: $steps",
+                        text = if (preferences.autoQuality && selectedSampler == SamplerType.LCM_FAST) "Steps: Auto (${AutoQuality.LCM_STEPS})" else "Steps: $steps",
                         color = textColor,
                         style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                         modifier = Modifier.weight(1f)
@@ -582,12 +607,14 @@ fun ImageToImageScreen(
                     }
                 }
 
-                Slider(
-                    value = steps.toFloat(),
-                    onValueChange = { steps = it.toInt() },
-                    enabled = !isGenerating,
-                    valueRange = if (selectedSampler == SamplerType.LCM_FAST) 4f..12f else 10f..25f
-                )
+                if (!preferences.autoQuality) {
+                    Slider(
+                        value = steps.toFloat(),
+                        onValueChange = { steps = it.toInt() },
+                        enabled = !isGenerating,
+                        valueRange = if (selectedSampler == SamplerType.LCM_FAST) 4f..12f else 10f..25f
+                    )
+                }
 
                 val allFourModelsReady = metrics.isImg2ImgReadyFor(preferences.activeEngine)
                 val btnShape = RoundedCornerShape(22.dp)
