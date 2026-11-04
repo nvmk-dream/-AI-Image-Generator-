@@ -634,17 +634,48 @@ class ExampleUnitTest {
 
         // Prompts across all 4 modules strictly specify DSLR photorealistic photography
         for (tab in com.example.ai.AvatarCustomTab.entries) {
-            val preset = com.example.ai.AvatarCustomizationCatalog.presetsForTab(tab).first()
-            val params = com.example.ai.AvatarCustomizationParams(
-                activeTab = tab,
-                selectedPresetId = preset.id,
-                customRealisticNote = "watercolor 3d natural sunlight"
+            for (preset in com.example.ai.AvatarCustomizationCatalog.presetsForTab(tab)) {
+                for (fabric in com.example.ai.OutfitFabricOption.entries) {
+                    val params = com.example.ai.AvatarCustomizationParams(
+                        activeTab = tab,
+                        selectedPresetId = preset.id,
+                        outfitFabric = fabric,
+                        clothDrapingRealism = 0.35f,
+                        garmentTailoredFit = 0.25f,
+                        transformationStrength = 0.47f,
+                        customRealisticNote = "மெரூன் பட்டு பார்டர், கோவில் இயற்கை ஒளி, ஓவியம் watercolor 3d"
+                    )
+                    val (prompt, strength) = com.example.ai.AvatarCustomizationCatalog.buildRealisticPromptAndStrength(params)
+                    assertTrue(prompt.contains("DSLR"))
+                    assertTrue(prompt.contains("photorealistic photography"))
+                    assertTrue(prompt.contains("deep maroon"))
+                    assertFalse(OfflineTamilPromptTranslator.containsTamil(prompt))
+                    assertFalse(prompt.contains("painting", ignoreCase = true))
+                    assertFalse(prompt.contains("watercolor", ignoreCase = true))
+                    assertTrue(strength in 0.35f..0.88f)
+                    // Verify even if passed through MandatorySafetyGuard, zero DSLR preset/fabric/drape words are ever blocked!
+                    assertTrue(
+                        "Expected allowed for preset=${preset.id}, fabric=${fabric.id}",
+                        MandatorySafetyGuard.validateRequest(prompt, hasRealPersonReferencePhoto = true).allowed
+                    )
+                }
+            }
+        }
+
+        // Verify whole-word safety matching never blocks garment/anatomy/translated words
+        val innocentPrompts = listOf(
+            "clean smooth garment drape, structured lapel drape, relaxed breathable drape fit",
+            "pinstripe business suit, striped cotton shirt, unisex denim jacket, strapless evening gown",
+            "muscular trapezius and shirtless six-pack abdominal physique at beach",
+            "பட்டுப் புடவை அணிந்த பெண், கோவில் பின்புலம், தங்க நகைகள், கைக்கடிகாரம்",
+            ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT,
+            ContentSafetyDefaults.STRICT_TEMPLATE_PROMPT
+        )
+        for (safeText in innocentPrompts) {
+            assertTrue(
+                "Expected innocent text to be allowed: $safeText",
+                MandatorySafetyGuard.validateRequest(safeText, hasRealPersonReferencePhoto = true).allowed
             )
-            val (prompt, strength) = com.example.ai.AvatarCustomizationCatalog.buildRealisticPromptAndStrength(params)
-            assertTrue(prompt.contains("DSLR"))
-            assertTrue(prompt.contains("photorealistic photography"))
-            assertFalse(prompt.contains("watercolor", ignoreCase = true))
-            assertTrue(strength in 0.25f..0.80f)
         }
 
         // Spatial 4-channel latent blending preserves unmasked reference and applies masked edit

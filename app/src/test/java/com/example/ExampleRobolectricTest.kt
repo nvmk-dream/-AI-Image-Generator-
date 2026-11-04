@@ -262,4 +262,82 @@ class ExampleRobolectricTest {
             .performScrollTo()
             .assertIsDisplayed()
     }
+
+    @Test
+    fun `avatar customization screen displays before after canvas and bottom result card when photo generated`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val realMetrics = OnnxModelManager(context).inspectCurrentMetrics()
+        val tempOutFile = File.createTempFile("avatar_out_test_", ".png")
+        val bmp = android.graphics.Bitmap.createBitmap(64, 64, android.graphics.Bitmap.Config.ARGB_8888)
+        java.io.FileOutputStream(tempOutFile).use { out ->
+            bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+        }
+        bmp.recycle()
+
+        try {
+            val mockCreation = com.example.data.GeneratedCreation(
+                id = "av_1",
+                filePath = tempOutFile.absolutePath,
+                userPrompt = "Avatar • Outfit (Festive Silk Kurta)",
+                finalGenerationInput = "RAW candid DSLR photograph",
+                resolution = "512 × 512",
+                steps = 5,
+                seed = 428519L,
+                durationMs = 6200L,
+                createdAtEpochMs = System.currentTimeMillis(),
+                isFavorite = false
+            )
+
+            composeTestRule.setContent {
+                MyApplicationTheme(darkTheme = false) {
+                    com.example.ui.screens.AvatarCustomizationScreen(
+                        preferences = AppPreferencesState(),
+                        metrics = realMetrics,
+                        sourcePhotoUri = android.net.Uri.fromFile(tempOutFile),
+                        hasLatestAppCreation = true,
+                        params = com.example.ai.AvatarCustomizationParams(
+                            activeTab = com.example.ai.AvatarCustomTab.OUTFIT,
+                            selectedPresetId = "outfit_festive_kurta"
+                        ),
+                        userBrushStrokes = emptyList(),
+                        visionAnalysis = null,
+                        maskOverlayBitmap = null,
+                        latestAvatarCreation = mockCreation,
+                        latestAvatarSourcePath = tempOutFile.absolutePath,
+                        isGenerating = false,
+                        progress = null,
+                        errorMessage = null,
+                        isDownloadingMediaPipe = false,
+                        mediaPipeDownloadStatus = null,
+                        onSelectEngine = {},
+                        onPickSourcePhoto = {},
+                        onUseLatestAppCreation = {},
+                        onParamsChange = {},
+                        onAddBrushStroke = {},
+                        onUndoBrushStroke = {},
+                        onResetBrushStrokes = {},
+                        onDownloadMediaPipeTasks = {},
+                        onGenerateAvatar = {},
+                        onCancelGeneration = {},
+                        onUseResultAsNextSource = {},
+                        onToggleFavorite = {},
+                        onExportToGallery = {},
+                        onOpenModelsTab = {},
+                        onOpenContentSafetySettings = {},
+                        onBack = {}
+                    )
+                }
+            }
+            composeTestRule.waitForIdle()
+
+            composeTestRule.onNodeWithTag("avatar_before_after_canvas")
+                .performScrollTo()
+                .assertIsDisplayed()
+            composeTestRule.onNodeWithTag("avatar_bottom_result_card")
+                .performScrollTo()
+                .assertIsDisplayed()
+        } finally {
+            tempOutFile.delete()
+        }
+    }
 }

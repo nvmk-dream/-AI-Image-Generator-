@@ -34,7 +34,9 @@ import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Checkroom
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Compare
 import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Elderly
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.FolderSpecial
@@ -55,7 +57,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,11 +68,13 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.ai.AvatarCustomTab
 import com.example.ai.AvatarCustomizationCatalog
 import com.example.ai.AvatarCustomizationParams
@@ -98,6 +104,8 @@ import com.example.ui.theme.PurpleActionStart
 import com.example.ui.theme.SoftAmberStatus
 import com.example.ui.theme.VibrantPinkPill
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
@@ -157,6 +165,18 @@ fun AvatarCustomizationScreen(
         }
     }
 
+    val mainScrollState = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
+    var lastAutoScrolledCreationId by remember { mutableStateOf(latestAvatarCreation?.id) }
+
+    LaunchedEffect(latestAvatarCreation?.id) {
+        val currentId = latestAvatarCreation?.id
+        if (currentId != null && currentId != lastAutoScrolledCreationId) {
+            lastAutoScrolledCreationId = currentId
+            mainScrollState.animateScrollTo(0)
+        }
+    }
+
     val (_, strippedForbidden) = remember(params.customRealisticNote) {
         AvatarCustomizationCatalog.sanitizeCustomRealisticNote(params.customRealisticNote)
     }
@@ -167,7 +187,7 @@ fun AvatarCustomizationScreen(
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.statusBars)
             .windowInsetsPadding(WindowInsets.navigationBars)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(mainScrollState)
             .padding(horizontal = 16.dp)
             .testTag("avatar_customization_screen")
     ) {
@@ -956,6 +976,106 @@ fun AvatarCustomizationScreen(
                             color = Color.White,
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                         )
+                    }
+                }
+            }
+
+            // Instant Bottom Generated Result Preview Card (visible right next to Generate button too!)
+            if (!isGenerating && latestAvatarCreation != null && File(latestAvatarCreation.filePath).exists()) {
+                FrostedGlassCard(
+                    darkTheme = darkTheme,
+                    modifier = Modifier.testTag("avatar_bottom_result_card")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        AsyncImage(
+                            model = File(latestAvatarCreation.filePath),
+                            contentDescription = "Latest Generated Realistic Avatar Photo",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(78.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .border(1.5.dp, NeonReadyGreen, RoundedCornerShape(14.dp))
+                        )
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = if (isTamil) {
+                                    "✅ புதிய Realistic புகைப்படம் தயார்!"
+                                } else {
+                                    "✅ Realistic DSLR Photo Ready!"
+                                },
+                                color = NeonReadyGreen,
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold)
+                            )
+                            Text(
+                                text = "${latestAvatarCreation.resolution} • ${(latestAvatarCreation.durationMs / 1000L).coerceAtLeast(1L)}s",
+                                color = subColor,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold)
+                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Brush.horizontalGradient(listOf(PurpleActionStart, PurpleActionEnd)))
+                                        .clickable {
+                                            coroutineScope.launch { mainScrollState.animateScrollTo(0) }
+                                        }
+                                        .padding(vertical = 8.dp, horizontal = 8.dp)
+                                        .testTag("avatar_bottom_scroll_compare_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Compare,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (isTamil) "Before/After ↑" else "Before/After ↑",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        maxLines = 1
+                                    )
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center,
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Brush.horizontalGradient(listOf(PinkGlowStart, VibrantPinkPill)))
+                                        .clickable { onExportToGallery(latestAvatarCreation) }
+                                        .padding(vertical = 8.dp, horizontal = 10.dp)
+                                        .testTag("avatar_bottom_save_gallery_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Download,
+                                        contentDescription = "Save to Gallery",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (isTamil) "Save" else "Save",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

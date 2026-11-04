@@ -193,4 +193,28 @@ object ImageBitmapPreprocessor {
         }
         return file
     }
+
+    /**
+     * Copies a picked `content://` gallery URI into an internal cache file so temporary
+     * OEM gallery read permissions (e.g. Honor / EMUI / MIUI Photo Picker) never expire mid-session.
+     */
+    fun persistPickedPhotoUriToLocalFile(context: Context, uri: Uri): Uri {
+        if (uri.scheme == "file" && !uri.path.isNullOrBlank() && File(uri.path!!).exists()) {
+            return uri
+        }
+        return runCatching {
+            val dir = File(context.cacheDir, "picked_gallery_sources").apply { if (!exists()) mkdirs() }
+            dir.listFiles()?.sortedByDescending { it.lastModified() }?.drop(5)?.forEach {
+                runCatching { it.delete() }
+            }
+            val dest = File(dir, "picked_${System.currentTimeMillis()}.jpg")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(dest).use { output ->
+                    input.copyTo(output, bufferSize = 64 * 1024)
+                    output.flush()
+                }
+            }
+            if (dest.exists() && dest.length() > 512L) Uri.fromFile(dest) else uri
+        }.getOrElse { uri }
+    }
 }

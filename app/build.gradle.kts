@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.imagegenerator.nvmkai"
     minSdk = 24
     targetSdk = 36
-    versionCode = 114
-    versionName = "2.3.0"
+    versionCode = 115
+    versionName = "2.3.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

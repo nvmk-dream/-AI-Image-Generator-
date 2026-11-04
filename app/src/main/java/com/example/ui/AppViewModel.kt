@@ -317,7 +317,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateSelectedInputPhoto(uri: Uri?) {
+        if (uri == null) {
+            transientState.update { it.copy(selectedInputPhotoUri = null, generationErrorMessage = null) }
+            return
+        }
         transientState.update { it.copy(selectedInputPhotoUri = uri, generationErrorMessage = null) }
+        viewModelScope.launch {
+            val safeLocalUri = withContext(Dispatchers.IO) {
+                ImageBitmapPreprocessor.persistPickedPhotoUriToLocalFile(getApplication(), uri)
+            }
+            transientState.update { it.copy(selectedInputPhotoUri = safeLocalUri) }
+        }
     }
 
     fun clearToast() {
@@ -1363,7 +1373,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         if (uri != null) {
-            analyzeAndRefreshAvatarMask(uri)
+            viewModelScope.launch {
+                val safeLocalUri = withContext(Dispatchers.IO) {
+                    ImageBitmapPreprocessor.persistPickedPhotoUriToLocalFile(getApplication(), uri)
+                }
+                transientState.update { it.copy(avatarSourcePhotoUri = safeLocalUri) }
+                analyzeAndRefreshAvatarMask(safeLocalUri)
+            }
         }
     }
 

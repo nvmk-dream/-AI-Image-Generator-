@@ -367,10 +367,14 @@ object AvatarCustomizationCatalog {
         presets.firstOrNull { it.id == id }
 
     private val FORBIDDEN_NON_REALISTIC_WORDS = listOf(
-        "painting", "oil paint", "watercolor", "gouache", "acrylic",
-        "3d", "cgi", "render", "blender", "unreal engine", "octane",
+        "digital painting", "oil painting", "oil paint", "painting", "watercolor", "gouache", "acrylic",
+        "3d render", "3d", "cgi", "render", "blender", "unreal engine", "octane",
         "anime", "manga", "cartoon", "animation", "animated", "pixar", "disney",
         "illustration", "sketch", "drawing", "lineart", "comic", "cel shaded", "vector art", "doll"
+    )
+
+    private val FORBIDDEN_TAMIL_NON_REALISTIC_WORDS = listOf(
+        "ஓவியம்", "கார்ட்டூன்", "அனிமேஷன்", "சித்திரம்", "பொம்மை"
     )
 
     const val STRICT_ANTI_NON_PHOTO_NEGATIVE_PROMPT: String =
@@ -379,26 +383,44 @@ object AvatarCustomizationCatalog {
             "deformed face, altered identity, asymmetrical eyes, deformed hands, extra fingers, blurry, low quality"
 
     /**
-     * Strips any painting/3D/animation terms so Avatar Customization strictly produces
-     * 100% realistic camera photography only.
+     * Translates Tamil words to English DSLR descriptors if present, and strips only
+     * painting/3D/animation terms so Avatar Customization produces 100% realistic camera photography.
      */
     fun sanitizeCustomRealisticNote(rawNote: String): Pair<String, Boolean> {
-        var cleaned = rawNote.trim()
-        if (cleaned.isEmpty()) return "" to false
+        var working = rawNote.trim()
+        if (working.isEmpty()) return "" to false
+
         var strippedAny = false
-        for (bad in FORBIDDEN_NON_REALISTIC_WORDS) {
-            val regex = Regex("\\b${Regex.escape(bad)}\\b", RegexOption.IGNORE_CASE)
-            if (regex.containsMatchIn(cleaned)) {
+        for (taBad in FORBIDDEN_TAMIL_NON_REALISTIC_WORDS) {
+            if (working.contains(taBad)) {
                 strippedAny = true
-                cleaned = cleaned.replace(regex, "").trim()
+                working = working.replace(taBad, " ")
             }
         }
-        cleaned = cleaned.replace(Regex("\\s{2,}"), " ").trim(' ', ',', '.')
-        return cleaned to strippedAny
+
+        if (OfflineTamilPromptTranslator.containsTamil(working)) {
+            working = OfflineTamilPromptTranslator.normalizeForClip(working)
+        }
+
+        for (bad in FORBIDDEN_NON_REALISTIC_WORDS) {
+            val regex = Regex("(?<![a-z0-9])${Regex.escape(bad)}(?![a-z0-9])", RegexOption.IGNORE_CASE)
+            if (regex.containsMatchIn(working)) {
+                strippedAny = true
+                working = working.replace(regex, " ").trim()
+            }
+        }
+
+        working = working
+            .replace(Regex("\\bartistic\\b", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("\\s{2,}"), " ")
+            .replace(Regex("(,\\s*)+"), ", ")
+            .trim(' ', ',', '.')
+        return working to strippedAny
     }
 
     /**
-     * Builds the camera-realistic positive prompt & effective denoising strength from all 16 user sliders.
+     * Builds the camera-realistic positive prompt (front-loaded within CLIP's 77-token window)
+     * and calibrated masked-region denoising strength from all 16 user sliders.
      */
     fun buildRealisticPromptAndStrength(params: AvatarCustomizationParams): Pair<String, Float> {
         val preset = findPreset(params.selectedPresetId)
@@ -413,50 +435,50 @@ object AvatarCustomizationCatalog {
                 val age = params.targetAge.coerceIn(16, 80)
                 val wrinkleDesc = when {
                     age <= 24 || params.skinWrinkleIntensity < 0.22f ->
-                        "smooth youthful natural human skin pores, clear under-eyes"
+                        "smooth youthful natural skin pores, clear eyes"
                     age <= 42 || params.skinWrinkleIntensity < 0.48f ->
-                        "natural adult skin texture with subtle authentic expression lines"
+                        "natural adult skin texture, subtle expression lines"
                     age <= 62 || params.skinWrinkleIntensity < 0.72f ->
-                        "mature natural skin creases, realistic laugh lines and crow's feet"
+                        "mature skin creases, natural laugh lines and crow's feet"
                     else ->
-                        "deep authentic aged skin wrinkles, forehead lines, natural crow's feet and realistic elder skin pores"
+                        "deep authentic aged skin wrinkles, forehead lines, natural crow's feet"
                 }
                 val hairAgeDesc = when {
-                    params.silverHairRatio >= 0.70f -> "natural silver-white aged human hair strands"
-                    params.silverHairRatio >= 0.35f -> "natural salt-and-pepper greying temple hair"
+                    params.silverHairRatio >= 0.70f -> "natural silver-white hair strands"
+                    params.silverHairRatio >= 0.35f -> "salt-and-pepper greying temple hair"
                     else -> "natural dark human hair"
                 }
                 val ageDeltaFactor = (abs(age - 30).toFloat() / 50f).coerceIn(0.10f, 1.0f)
                 val computedStrength = (
-                    params.transformationStrength * 0.65f +
-                        ageDeltaFactor * 0.22f -
-                        (params.facialBoneConsistency - 0.75f) * 0.15f
-                    ).coerceIn(0.26f, 0.62f)
+                    0.34f +
+                        params.transformationStrength * 0.42f +
+                        ageDeltaFactor * 0.12f -
+                        (params.facialBoneConsistency - 0.75f) * 0.12f
+                    ).coerceIn(0.36f, 0.72f)
 
-                val prompt = "RAW candid 85mm DSLR portrait photograph of the exact same person at age $age years old, " +
-                    "$wrinkleDesc, $hairAgeDesc, ${preset.promptDescriptor}$noteClause, " +
-                    "preserving exact eye shape and facial bone structure, real natural daylight, photorealistic photography"
+                val prompt = "RAW 85mm DSLR photograph of same person at age $age years old$noteClause, " +
+                    "$wrinkleDesc, $hairAgeDesc, ${preset.promptDescriptor}, photorealistic photography"
                 prompt to computedStrength
             }
 
             AvatarCustomTab.BODY_ABS -> {
                 val absDesc = when {
-                    params.absCoreDefinition >= 0.72f -> "well-defined natural six-pack abdominal muscles and sculpted core"
-                    params.absCoreDefinition >= 0.42f -> "toned athletic flat midsection and fit core"
+                    params.absCoreDefinition >= 0.72f -> "well-defined natural six-pack abdominal muscles, sculpted core"
+                    params.absCoreDefinition >= 0.42f -> "toned athletic flat midsection, fit core"
                     else -> "natural healthy proportionate torso"
                 }
                 val massDesc = when {
-                    params.muscleShoulderMass >= 0.72f -> "broad muscular shoulders and athletic chest frame"
-                    params.muscleShoulderMass >= 0.42f -> "toned athletic shoulders and fit upper body"
+                    params.muscleShoulderMass >= 0.72f -> "broad muscular shoulders and athletic chest"
+                    params.muscleShoulderMass >= 0.42f -> "toned athletic shoulders and upper body"
                     else -> "lean streamlined athletic frame"
                 }
                 val waistDesc = if (params.waistBodyTrim >= 0.60f) ", trim athletic waistline" else ""
                 val computedStrength = (
-                    params.transformationStrength * 0.80f + params.absCoreDefinition * 0.12f
-                    ).coerceIn(0.32f, 0.74f)
+                    0.38f + params.transformationStrength * 0.45f + params.absCoreDefinition * 0.08f
+                    ).coerceIn(0.46f, 0.84f)
 
-                val prompt = "RAW candid DSLR photograph, $absDesc, $massDesc$waistDesc, " +
-                    "${preset.promptDescriptor}$noteClause, authentic human skin pores and natural lighting, photorealistic photography"
+                val prompt = "RAW candid DSLR photograph, $absDesc, $massDesc$waistDesc$noteClause, " +
+                    "${preset.promptDescriptor}, natural skin pores and daylight, photorealistic photography"
                 prompt to computedStrength
             }
 
@@ -469,37 +491,37 @@ object AvatarCustomizationCatalog {
                 val lenDesc = when {
                     params.hairLengthScale >= 0.70f -> "flowing long length"
                     params.hairLengthScale >= 0.38f -> "shoulder-to-medium length"
-                    else -> "clean short cropped length"
+                    else -> "clean short cropped haircut"
                 }
                 val shineDesc = if (params.hairNaturalShine >= 0.60f) {
-                    "healthy natural daylight hair sheen"
+                    "natural daylight hair sheen"
                 } else {
-                    "natural matte human hair texture"
+                    "natural matte hair texture"
                 }
-                val computedStrength = (params.transformationStrength * 0.90f).coerceIn(0.34f, 0.76f)
+                val computedStrength = (0.40f + params.transformationStrength * 0.46f).coerceIn(0.48f, 0.85f)
 
-                val prompt = "RAW 85mm DSLR portrait photograph, ${preset.promptDescriptor}, " +
-                    "$volDesc, $lenDesc, ${params.hairShade.promptPhrase}, $shineDesc$noteClause, " +
-                    "individual realistic human hair strands and natural scalp hairline, photorealistic photography"
+                val prompt = "RAW 85mm DSLR photograph, ${preset.promptDescriptor}$noteClause, " +
+                    "$volDesc, $lenDesc, ${params.hairShade.promptPhrase}, $shineDesc, " +
+                    "realistic hair strands and hairline, photorealistic photography"
                 prompt to computedStrength
             }
 
             AvatarCustomTab.OUTFIT -> {
-                val drapeDesc = if (params.clothDrapingRealism >= 0.65f) {
-                    "natural gravity cloth folds, realistic seams and ambient fabric shadows matching body pose"
+                val foldDesc = if (params.clothDrapingRealism >= 0.65f) {
+                    "natural gravity cloth folds, realistic seams and ambient fabric shadows"
                 } else {
-                    "clean smooth garment drape"
+                    "clean smooth tailored garment folds"
                 }
                 val fitDesc = when {
                     params.garmentTailoredFit >= 0.70f -> "bespoke tailored slim fit"
                     params.garmentTailoredFit >= 0.38f -> "classic comfortable natural fit"
-                    else -> "relaxed breathable drape fit"
+                    else -> "relaxed breathable garment fit"
                 }
-                val computedStrength = (params.transformationStrength * 0.92f).coerceIn(0.36f, 0.78f)
+                val computedStrength = (0.42f + params.transformationStrength * 0.46f).coerceIn(0.50f, 0.86f)
 
-                val prompt = "RAW candid DSLR portrait photograph, ${preset.promptDescriptor}, " +
-                    "crafted from ${params.outfitFabric.promptPhrase}, $fitDesc, $drapeDesc$noteClause, " +
-                    "authentic woven textile texture in natural lighting, photorealistic photography"
+                val prompt = "RAW candid DSLR photograph, ${preset.promptDescriptor}$noteClause, " +
+                    "made of ${params.outfitFabric.promptPhrase}, $fitDesc, $foldDesc, " +
+                    "authentic woven textile texture, photorealistic photography"
                 prompt to computedStrength
             }
         }

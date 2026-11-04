@@ -835,6 +835,17 @@ class OnnxDiffusionEngine(
             cancelRequested.set(false)
             val startMs = System.currentTimeMillis()
 
+            // 1. Validate ONLY raw user-typed note (never block internal DSLR presets or Tamil-to-English translations)
+            if (params.customRealisticNote.isNotBlank()) {
+                val safetyCheck = MandatorySafetyGuard.validateRequest(
+                    userPrompt = params.customRealisticNote,
+                    hasRealPersonReferencePhoto = true
+                )
+                if (!safetyCheck.allowed) {
+                    error(safetyCheck.messageEn ?: "Please adjust your optional note and try again.")
+                }
+            }
+
             val (builtPrompt, computedStrength) = AvatarCustomizationCatalog.buildRealisticPromptAndStrength(params)
             val finalPositiveInput = if (safetyTailPrompt.isNotBlank()) {
                 "$builtPrompt, $safetyTailPrompt"
@@ -842,12 +853,22 @@ class OnnxDiffusionEngine(
                 builtPrompt
             }
 
-            val safetyCheck = MandatorySafetyGuard.validateRequest(
-                userPrompt = builtPrompt,
-                hasRealPersonReferencePhoto = true
-            )
-            if (!safetyCheck.allowed) {
-                error(safetyCheck.messageEn ?: "Please adjust your customization note and try again.")
+            // 2. Pre-flight check of required ONNX model slots BEFORE allocating bitmaps or running MediaPipe
+            val slot7Candidate = if (params.activeTab == AvatarCustomTab.AGE) {
+                modelManager.resolveExistingSlotFile(DiffusionModelSlot.FACE_AGING)
+                    ?.takeIf { OnnxModelManager.findMissingCompanionFiles(it).isEmpty() }
+            } else {
+                null
+            }
+
+            val coreFiles = if (slot7Candidate == null) {
+                val vaeEnc = requireCompleteSlotFile(DiffusionModelSlot.VAE_ENCODER, "Slot 5 (VAE Encoder)")
+                val textEnc = requireCompleteSlotFile(DiffusionModelSlot.TEXT_ENCODER, "Slot 3 (Text Encoder CLIP)")
+                val unet = requireCompleteActiveEngineFile(activeEngine)
+                val vaeDec = requireCompleteSlotFile(DiffusionModelSlot.VAE_DECODER, "Slot 4 (VAE Decoder)")
+                listOf(vaeEnc, textEnc, unet, vaeDec)
+            } else {
+                null
             }
 
             val (width, height) = parseResolution(resolutionLabel)
@@ -871,22 +892,27 @@ class OnnxDiffusionEngine(
                 targetWidth = width,
                 targetHeight = height
             )
-            val croppedSourceFile = ImageBitmapPreprocessor.saveReferencePreview(context, originalCropped)
 
-            val analysis = visionEngine.analyzePhoto(originalCropped)
-            val usedMediaPipe = analysis.usedMediaPipeFace || analysis.usedMediaPipePose || analysis.usedMediaPipeSegmenter
-            val featheredMask = visionEngine.buildFeatheredMask(
-                analysis = analysis,
-                params = params,
-                userStrokes = userBrushStrokes,
-                outWidth = width,
-                outHeight = height
-            )
+            val croppedSourceFile: File
+            val usedMediaPipe: Boolean
+            val featheredMask: FloatArray
+            var cleanImageLatents: FloatArray? = null
 
-            // Check Optional Slot 7 Dedicated Face-Aging ONNX Model first when in AGE tab
-            if (params.activeTab == AvatarCustomTab.AGE) {
-                val slot7File = modelManager.resolveExistingSlotFile(DiffusionModelSlot.FACE_AGING)
-                if (slot7File != null && OnnxModelManager.findMissingCompanionFiles(slot7File).isEmpty()) {
+            try {
+                croppedSourceFile = ImageBitmapPreprocessor.saveReferencePreview(context, originalCropped)
+
+                val analysis = visionEngine.analyzePhoto(originalCropped)
+                usedMediaPipe = analysis.usedMediaPipeFace || analysis.usedMediaPipePose || analysis.usedMediaPipeSegmenter
+                featheredMask = visionEngine.buildFeatheredMask(
+                    analysis = analysis,
+                    params = params,
+                    userStrokes = userBrushStrokes,
+                    outWidth = width,
+                    outHeight = height
+                )
+
+                // Check Optional Slot 7 Dedicated Face-Aging ONNX Model first when in AGE tab
+                if (slot7Candidate != null) {
                     onProgress(
                         GenerationProgress(
                             stageTitle = "Running Slot 7 Face-Aging ONNX Engine (Age ${params.targetAge})...",
@@ -897,7 +923,7 @@ class OnnxDiffusionEngine(
                         )
                     )
                     val slot7AgedBitmap = runCatching {
-                        createSafeSession(env, slot7File, inferenceMode).use { agingSession ->
+                        createSafeSession(env, slot7Candidate, inferenceMode).use { agingSession ->
                             AvatarPhotoCompositor.tryRunOptionalSlot7AgingModel(
                                 env = env,
                                 session = agingSession,
@@ -908,14 +934,15 @@ class OnnxDiffusionEngine(
                     }.getOrNull()
 
                     if (slot7AgedBitmap != null) {
-                        val composited = AvatarPhotoCompositor.compositeIdentityLockedPhoto(
-                            original = originalCropped,
-                            generated = slot7AgedBitmap,
-                            featheredMask = featheredMask
-                        )
-                        slot7AgedBitmap.recycle()
-                        originalCropped.recycle()
-                        System.gc()
+                        val composited = try {
+                            AvatarPhotoCompositor.compositeIdentityLockedPhoto(
+                                original = originalCropped,
+                                generated = slot7AgedBitmap,
+                                featheredMask = featheredMask
+                            )
+                        } finally {
+                            slot7AgedBitmap.recycle()
+                        }
                         val totalMs = System.currentTimeMillis() - startMs
                         onProgress(
                             GenerationProgress(
@@ -941,17 +968,50 @@ class OnnxDiffusionEngine(
                         )
                     }
                 }
+
+                // Encode original cropped photo into latent space BEFORE releasing originalCropped bitmap from RAM
+                val vaeEncForFallback = coreFiles?.get(0)
+                    ?: requireCompleteSlotFile(DiffusionModelSlot.VAE_ENCODER, "Slot 5 (VAE Encoder)")
+                val latentSize = 4 * (height / 8) * (width / 8)
+
+                onProgress(
+                    GenerationProgress(
+                        stageTitle = "Encoding Original Photo (VAE Encoder)...",
+                        currentStep = 0,
+                        totalSteps = steps.coerceAtLeast(4),
+                        percent = 14,
+                        elapsedMs = System.currentTimeMillis() - startMs
+                    )
+                )
+                checkNotCancelled()
+
+                cleanImageLatents = createSafeSession(env, vaeEncForFallback, inferenceMode).use { vaeEncSession ->
+                    runVaeEncoder(
+                        env = env,
+                        vaeEncSession = vaeEncSession,
+                        bitmap = originalCropped,
+                        latentSize = latentSize,
+                        seed = seed
+                    )
+                }
+            } finally {
+                originalCropped.recycle()
             }
+            System.gc()
 
             // Core 1A–6 Latent-Space Masked Diffusion Inpainting Pipeline
-            val vaeEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_ENCODER, "Slot 5 (VAE Encoder)")
-            val textEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.TEXT_ENCODER, "Slot 3 (Text Encoder CLIP)")
-            val unetFile = requireCompleteActiveEngineFile(activeEngine)
-            val vaeDecoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_DECODER, "Slot 4 (VAE Decoder)")
+            val textEncoderFile = coreFiles?.get(1)
+                ?: requireCompleteSlotFile(DiffusionModelSlot.TEXT_ENCODER, "Slot 3 (Text Encoder CLIP)")
+            val unetFile = coreFiles?.get(2)
+                ?: requireCompleteActiveEngineFile(activeEngine)
+            val vaeDecoderFile = coreFiles?.get(3)
+                ?: requireCompleteSlotFile(DiffusionModelSlot.VAE_DECODER, "Slot 4 (VAE Decoder)")
+
+            val encodedCleanLatents = cleanImageLatents
+                ?: error("Failed to encode reference image latents.")
 
             val latentW = width / 8
             val latentH = height / 8
-            val latentSize = 4 * latentH * latentW
             val latentMask = AvatarPhotoCompositor.downsampleMaskToLatentGrid(
                 pixelMask = featheredMask,
                 imgW = width,
@@ -959,28 +1019,6 @@ class OnnxDiffusionEngine(
                 latentW = latentW,
                 latentH = latentH
             )
-
-            onProgress(
-                GenerationProgress(
-                    stageTitle = "Encoding Original Photo (VAE Encoder)...",
-                    currentStep = 0,
-                    totalSteps = steps.coerceAtLeast(4),
-                    percent = 14,
-                    elapsedMs = System.currentTimeMillis() - startMs
-                )
-            )
-            checkNotCancelled()
-
-            val cleanImageLatents = createSafeSession(env, vaeEncoderFile, inferenceMode).use { vaeEncSession ->
-                runVaeEncoder(
-                    env = env,
-                    vaeEncSession = vaeEncSession,
-                    bitmap = originalCropped,
-                    latentSize = latentSize,
-                    seed = seed
-                )
-            }
-            System.gc()
 
             onProgress(
                 GenerationProgress(
@@ -1046,7 +1084,7 @@ class OnnxDiffusionEngine(
 
                 if (effectiveSampler == SamplerType.LCM_FAST) {
                     val scheduler = DiffusionSchedulers.LcmSession(effectiveSteps)
-                    var latents = scheduler.addNoise(cleanImageLatents, startStepIndex, seed)
+                    var latents = scheduler.addNoise(encodedCleanLatents, startStepIndex, seed)
                     var executed = 0
 
                     for (stepIdx in startStepIndex until effectiveSteps) {
@@ -1078,17 +1116,18 @@ class OnnxDiffusionEngine(
                             imageHeight = height
                         )
                         val editedNext = scheduler.step(noisePred, stepIdx, latents, seed)
+                        // Use identical deterministic seed so reference trajectory shares the exact base Gaussian noise
                         val refAtNext = if (stepIdx + 1 < effectiveSteps) {
-                            scheduler.addNoise(cleanImageLatents, stepIdx + 1, seed + stepIdx + 1L)
+                            scheduler.addNoise(encodedCleanLatents, stepIdx + 1, seed)
                         } else {
-                            cleanImageLatents
+                            encodedCleanLatents
                         }
                         latents = AvatarPhotoCompositor.blendLatentStep(editedNext, refAtNext, latentMask)
                     }
                     latents
                 } else {
                     val scheduler = DiffusionSchedulers.EulerSession(effectiveSteps)
-                    var latents = scheduler.addNoise(cleanImageLatents, startStepIndex, seed)
+                    var latents = scheduler.addNoise(encodedCleanLatents, startStepIndex, seed)
                     var executed = 0
                     val twoPassCfg = effectiveGuidance > 1.15f && !unetRequiresStaticBatchTwo(unetSession)
 
@@ -1140,9 +1179,9 @@ class OnnxDiffusionEngine(
                         )
                         val editedNext = scheduler.step(finalNoise, stepIdx, latents)
                         val refAtNext = if (stepIdx + 1 < effectiveSteps) {
-                            scheduler.addNoise(cleanImageLatents, stepIdx + 1, seed + stepIdx + 1L)
+                            scheduler.addNoise(encodedCleanLatents, stepIdx + 1, seed)
                         } else {
-                            cleanImageLatents
+                            encodedCleanLatents
                         }
                         latents = AvatarPhotoCompositor.blendLatentStep(editedNext, refAtNext, latentMask)
                     }
@@ -1177,15 +1216,23 @@ class OnnxDiffusionEngine(
                     outHeight = height
                 )
             }
+            System.gc()
+
+            val reloadedOriginal = ImageBitmapPreprocessor.loadAndCenterCropFromUri(
+                context = context,
+                uri = Uri.fromFile(croppedSourceFile),
+                targetWidth = width,
+                targetHeight = height
+            )
             val finalComposited = try {
                 AvatarPhotoCompositor.compositeIdentityLockedPhoto(
-                    original = originalCropped,
+                    original = reloadedOriginal,
                     generated = rawGenerated,
                     featheredMask = featheredMask
                 )
             } finally {
                 rawGenerated.recycle()
-                originalCropped.recycle()
+                reloadedOriginal.recycle()
             }
             System.gc()
 

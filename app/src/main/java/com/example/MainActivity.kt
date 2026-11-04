@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,11 +79,11 @@ fun ImageGeneratorRoot(
     val uiState by appViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
-    var pendingDedicatedSlot by remember { mutableStateOf(DedicatedModelSlot.FAST_LCM_GRAPH) }
-    var pendingSlotForSingleImport by remember { mutableStateOf(DiffusionModelSlot.TEXT_ENCODER) }
-    var pendingSlotForCompanionImport by remember { mutableStateOf(DiffusionModelSlot.UNET) }
-    var pendingFolderUnetMode by remember { mutableStateOf<PreferredUnetImportMode?>(null) }
-    var photoPickTarget by remember { mutableStateOf(PhotoPickTarget.IMG2IMG_REFERENCE) }
+    var pendingDedicatedSlot by rememberSaveable { mutableStateOf(DedicatedModelSlot.FAST_LCM_GRAPH) }
+    var pendingSlotForSingleImport by rememberSaveable { mutableStateOf(DiffusionModelSlot.TEXT_ENCODER) }
+    var pendingSlotForCompanionImport by rememberSaveable { mutableStateOf(DiffusionModelSlot.UNET) }
+    var pendingFolderUnetMode by rememberSaveable { mutableStateOf<PreferredUnetImportMode?>(null) }
+    var photoPickTarget by rememberSaveable { mutableStateOf(PhotoPickTarget.IMG2IMG_REFERENCE) }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
