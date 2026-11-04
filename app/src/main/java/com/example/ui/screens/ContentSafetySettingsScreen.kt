@@ -186,9 +186,9 @@ fun ContentSafetySettingsScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Quick Preset Chips (Strict | Balanced | Custom)
+                // Quick Preset Chips (Strict | Balanced | Adult | Custom)
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     val modes = listOf(
@@ -201,6 +201,11 @@ fun ContentSafetySettingsScreen(
                             ContentSafetyMode.BALANCED,
                             "Balanced",
                             ContentSafetyDefaults.BALANCED_TEMPLATE_PROMPT
+                        ),
+                        Triple(
+                            ContentSafetyMode.ADULT,
+                            "Adult",
+                            ContentSafetyDefaults.ADULT_OPEN_TEMPLATE_PROMPT
                         ),
                         Triple(
                             ContentSafetyMode.CUSTOM,
@@ -297,7 +302,7 @@ fun ContentSafetySettingsScreen(
                     },
                     enabled = isEditing,
                     minLines = 4,
-                    maxLines = 8,
+                    maxLines = 20,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("content_safety_prompt_editor")
