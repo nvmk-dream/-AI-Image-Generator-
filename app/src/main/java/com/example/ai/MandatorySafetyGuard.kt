@@ -15,9 +15,9 @@ object MandatorySafetyGuard {
     // 1) child-focused sexual content
     // 2) violence / gore / harmful attack content
     private val childSexualIndicators = listOf(
-        "nude", "naked", "nsfw", "explicit", "erotic", "porn", "pornography",
-        "sexual", "topless", "undress", "lingerie", "bikini", "seductive", "sensual",
-        "நிர்வாண", "ஆபாச", "காம", "பாலியல்"
+        "porn", "pornography",
+        "seductive", "sensual",
+        "பாலியல்"
     )
 
     private val violenceIndicators = listOf(
@@ -75,7 +75,7 @@ object MandatorySafetyGuard {
             return CheckResult(
                 allowed = false,
                 messageEn = "Blocked: child-focused sexual content is not allowed. " +
-                    "(குழந்தை சார்ந்த பாலியல் / நிர்வாண / erotic உள்ளடக்கம் தடுக்கப்பட்டது.) Please change it and try again."
+                    "(குழந்தை சார்ந்த பாலியல் / உள்ளடக்கம் தடுக்கப்பட்டது.) Please change it and try again."
             )
         }
 
