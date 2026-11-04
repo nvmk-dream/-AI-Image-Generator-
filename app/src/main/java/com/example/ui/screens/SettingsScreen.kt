@@ -703,29 +703,23 @@ fun SettingsScreen(
             text = {
                 Text(
                     if (isTamil) {
-                        "உங்கள் மொபைலில் ஒரு Folder-ல் கீழ்கண்ட .onnx ஃபைல்களைச் சேமிக்கவும்:\n\n" +
-                            "Image Generation (4 மாடல்கள்):\n" +
-                            "1. text_encoder.onnx\n" +
-                            "2. unet/ (model.onnx + model.onnx.data [860 MB] அல்லது model.onnx + weights.pb [3.44 GB])\n" +
-                            "3. vae_decoder.onnx\n" +
-                            "4. vae_encoder.onnx\n\n" +
-                            "Face Swap (3 மாடல்கள் - விருப்பம்):\n" +
-                            "5. det_10g.onnx\n" +
-                            "6. w600k_r50.onnx\n" +
-                            "7. inswapper_128.onnx (அல்லது hyperswap_1b_256.onnx)\n\n" +
-                            "Settings பக்கத்தில் உள்ள 'ONNX மாடல் Download Links' மூலம் பதிவிறக்கி, Models பக்கத்தில் 'One-Touch Folder Upload' செய்யவும்."
+                        "உங்கள் மொபைலில் `Android/media/com.aistudio.imagegenerator.nvmkai/IG_Models/` ஃபோல்டரில் 8 Core ஸ்லாட் மாடல்கள் (1A–6) சேமிக்கப்படும்:\n\n" +
+                            "1A & 1B: Fast LCM UNet (model.onnx + model_int8.onnx.data [~860 MB])\n" +
+                            "2A & 2B: Standard SD UNet (model.onnx + weights.pb [~3.44 GB])\n" +
+                            "3: Text Encoder CLIP (model.onnx)\n" +
+                            "4: VAE Decoder (model.onnx)\n" +
+                            "5: VAE Encoder (model.onnx)\n" +
+                            "6: Tokenizer (vocab.json & merges.txt)\n\n" +
+                            "Models பக்கத்தில் 'Auto-Download Core Slots (1A–6)' அல்லது 'Folder Auto-Import' மூலம் எளிதாக இணைக்கலாம்."
                     } else {
-                        "Save your .onnx model files inside a folder on your phone:\n\n" +
-                            "Core Image Generation (4 Models):\n" +
-                            "1. text_encoder.onnx\n" +
-                            "2. unet/ (model.onnx + model.onnx.data [860 MB] OR model.onnx + weights.pb [3.44 GB])\n" +
-                            "3. vae_decoder.onnx\n" +
-                            "4. vae_encoder.onnx\n\n" +
-                            "Face Swap Add-On (3 Models - Optional):\n" +
-                            "5. det_10g.onnx\n" +
-                            "6. w600k_r50.onnx\n" +
-                            "7. inswapper_128.onnx (or hyperswap_1b_256.onnx)\n\n" +
-                            "Use 'ONNX Model Download Links' in Settings, then open the Models tab and tap 'One-Touch Folder Upload'."
+                        "Core ONNX models (Slots 1A–6) are stored directly inside `Android/media/com.aistudio.imagegenerator.nvmkai/IG_Models/`:\n\n" +
+                            "1A & 1B: Fast LCM UNet (model.onnx + model_int8.onnx.data [~860 MB])\n" +
+                            "2A & 2B: Standard SD UNet (model.onnx + weights.pb [~3.44 GB])\n" +
+                            "3: Text Encoder CLIP (model.onnx)\n" +
+                            "4: VAE Decoder (model.onnx)\n" +
+                            "5: VAE Encoder (model.onnx)\n" +
+                            "6: Tokenizer (vocab.json & merges.txt)\n\n" +
+                            "Use 'Auto-Download Core Slots (1A–6)' or 'Folder Auto-Import' in the Models tab."
                     }
                 )
             },

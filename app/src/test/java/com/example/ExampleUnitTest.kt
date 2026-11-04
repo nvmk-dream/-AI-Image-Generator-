@@ -142,7 +142,7 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun phase6ModelSlotMatcher_detectsDiffusionAndFaceSwapRepoModels() {
+    fun phase6ModelSlotMatcher_detectsCoreDiffusionRepoModels() {
         assertTrue(
             com.example.ai.OnnxModelManager.matchesSlot(
                 com.example.ai.DiffusionModelSlot.TEXT_ENCODER,
@@ -152,30 +152,16 @@ class ExampleUnitTest {
         )
         assertTrue(
             com.example.ai.OnnxModelManager.matchesSlot(
-                com.example.ai.DiffusionModelSlot.FACE_DETECTOR,
-                "det_10g.onnx",
-                "models"
+                com.example.ai.DiffusionModelSlot.VAE_DECODER,
+                "model.onnx",
+                "vae_decoder"
             )
         )
         assertTrue(
             com.example.ai.OnnxModelManager.matchesSlot(
-                com.example.ai.DiffusionModelSlot.FACE_RECOGNIZER,
-                "w600k_r50.onnx",
-                "models"
-            )
-        )
-        assertTrue(
-            com.example.ai.OnnxModelManager.matchesSlot(
-                com.example.ai.DiffusionModelSlot.FACE_SWAPPER,
-                "inswapper_128.onnx",
-                "models"
-            )
-        )
-        assertTrue(
-            com.example.ai.OnnxModelManager.matchesSlot(
-                com.example.ai.DiffusionModelSlot.FACE_SWAPPER,
-                "hyperswap_1b_256.onnx",
-                "models"
+                com.example.ai.DiffusionModelSlot.VAE_ENCODER,
+                "model.onnx",
+                "vae_encoder"
             )
         )
     }
@@ -268,13 +254,6 @@ class ExampleUnitTest {
             com.example.ai.OnnxModelManager.shouldCopyCompanionWeight(
                 onnxFileName = "vae_encoder.onnx",
                 onnxSizeBytes = 136_760_000L,
-                companionFileName = "weights.pb"
-            )
-        )
-        assertFalse(
-            com.example.ai.OnnxModelManager.shouldCopyCompanionWeight(
-                onnxFileName = "det_10g.onnx",
-                onnxSizeBytes = 16_900_000L,
                 companionFileName = "weights.pb"
             )
         )
@@ -589,13 +568,6 @@ class ExampleUnitTest {
                 normalizedName = "merges.txt",
                 parentNameLower = parent,
                 sizeBytes = 525_000L
-            ),
-            com.example.ai.OnnxModelManager.DiscoveredFolderFile(
-                index = 9,
-                rawName = "det_10g.onnx",
-                normalizedName = "det_10g.onnx",
-                parentNameLower = parent,
-                sizeBytes = 16_900_000L
             )
         )
 
@@ -610,7 +582,6 @@ class ExampleUnitTest {
         assertEquals(listOf(5), matched[com.example.ai.DedicatedModelSlot.VAE_DECODER])
         assertEquals(listOf(6), matched[com.example.ai.DedicatedModelSlot.VAE_ENCODER])
         assertEquals(listOf(7, 8), matched[com.example.ai.DedicatedModelSlot.TOKENIZER])
-        assertEquals(listOf(9), matched[com.example.ai.DedicatedModelSlot.FACE_DETECTOR])
     }
 
     @Test

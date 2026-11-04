@@ -9,7 +9,6 @@ import com.example.ai.DedicatedModelSlot
 import com.example.ai.DiffusionModelSlot
 import com.example.ai.GenerationProgress
 import com.example.ai.ImageEditorAdjustments
-import com.example.ai.OfflineFaceSwapEngine
 import com.example.ai.OfflineImageEditorEngine
 import com.example.ai.OnnxAutoModelDownloader
 import com.example.ai.OnnxDiffusionEngine
@@ -54,7 +53,6 @@ enum class ActiveScreen {
     TEXT_TO_IMAGE,
     IMAGE_TO_IMAGE,
     CHARACTER_STUDIO,
-    FACE_SWAP,
     IMAGE_EDITOR,
     MY_GALLERY
 }
@@ -81,11 +79,6 @@ data class ImageGeneratorUiState(
     val latestImg2ImgCreation: GeneratedCreation? = null,
     val latestImg2ImgSourcePath: String? = null,
     val latestCharacterCreation: GeneratedCreation? = null,
-    val faceSwapSourceUri: Uri? = null,
-    val faceSwapTargetUri: Uri? = null,
-    val useLatestCreationAsFaceSwapTarget: Boolean = false,
-    val latestFaceSwapCreation: GeneratedCreation? = null,
-    val latestFaceSwapTargetPreviewPath: String? = null,
     val editorImageUri: Uri? = null,
     val useLatestCreationInEditor: Boolean = false,
     val latestEditedCreation: GeneratedCreation? = null,
@@ -118,11 +111,6 @@ private data class TransientUiState(
     val latestImg2ImgCreation: GeneratedCreation? = null,
     val latestImg2ImgSourcePath: String? = null,
     val latestCharacterCreation: GeneratedCreation? = null,
-    val faceSwapSourceUri: Uri? = null,
-    val faceSwapTargetUri: Uri? = null,
-    val useLatestCreationAsFaceSwapTarget: Boolean = false,
-    val latestFaceSwapCreation: GeneratedCreation? = null,
-    val latestFaceSwapTargetPreviewPath: String? = null,
     val editorImageUri: Uri? = null,
     val useLatestCreationInEditor: Boolean = false,
     val latestEditedCreation: GeneratedCreation? = null,
@@ -144,7 +132,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val creationsRepo = CreationsRepository(application)
     private val characterRepo = CharacterStudioRepository(application)
     private val diffusionEngine = OnnxDiffusionEngine(application, modelManager)
-    private val faceSwapEngine = OfflineFaceSwapEngine(application, modelManager)
 
     private var activeGenerationJob: Job? = null
     private var activeAutoDownloadJob: Job? = null
@@ -195,11 +182,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             latestImg2ImgCreation = transient.latestImg2ImgCreation,
             latestImg2ImgSourcePath = transient.latestImg2ImgSourcePath,
             latestCharacterCreation = transient.latestCharacterCreation,
-            faceSwapSourceUri = transient.faceSwapSourceUri,
-            faceSwapTargetUri = transient.faceSwapTargetUri,
-            useLatestCreationAsFaceSwapTarget = transient.useLatestCreationAsFaceSwapTarget,
-            latestFaceSwapCreation = transient.latestFaceSwapCreation,
-            latestFaceSwapTargetPreviewPath = transient.latestFaceSwapTargetPreviewPath,
             editorImageUri = transient.editorImageUri,
             useLatestCreationInEditor = transient.useLatestCreationInEditor,
             latestEditedCreation = transient.latestEditedCreation,
@@ -695,103 +677,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Phase 6B: Offline Face Swap Actions
-    fun setFaceSwapSourceUri(uri: Uri?) {
-        transientState.update { it.copy(faceSwapSourceUri = uri, generationErrorMessage = null) }
-    }
-
-    fun setFaceSwapTargetUri(uri: Uri?) {
-        transientState.update {
-            it.copy(
-                faceSwapTargetUri = uri,
-                useLatestCreationAsFaceSwapTarget = false,
-                generationErrorMessage = null
-            )
-        }
-    }
-
-    fun useLatestCreationAsFaceSwapTarget() {
-        transientState.update {
-            it.copy(useLatestCreationAsFaceSwapTarget = true, generationErrorMessage = null)
-        }
-    }
-
-    fun runOfflineFaceSwap(enableSkinToneMatch: Boolean, blendStrength: Float) {
-        if (transientState.value.isGenerating) return
-        val snapshot = uiState.value
-        val srcUri = snapshot.faceSwapSourceUri
-        if (srcUri == null) {
-            transientState.update {
-                it.copy(generationErrorMessage = "Please select a Source Face photo first.")
-            }
-            return
-        }
-        val fallbackPath = if (snapshot.useLatestCreationAsFaceSwapTarget) {
-            snapshot.latestGeneratedCreation?.filePath
-        } else {
-            null
-        }
-        if (snapshot.faceSwapTargetUri == null && fallbackPath.isNullOrBlank()) {
-            transientState.update {
-                it.copy(generationErrorMessage = "Please select a Target Photo first.")
-            }
-            return
-        }
-
-        activeGenerationJob = viewModelScope.launch {
-            transientState.update {
-                it.copy(
-                    isGenerating = true,
-                    generationErrorMessage = null,
-                    generationProgress = GenerationProgress("Starting Offline Face Swap...", 1, 5, 5, 0L)
-                )
-            }
-
-            val result = withContext(Dispatchers.Default) {
-                faceSwapEngine.executeOfflineFaceSwap(
-                    sourceFaceUri = srcUri,
-                    targetImageUri = if (snapshot.useLatestCreationAsFaceSwapTarget) null else snapshot.faceSwapTargetUri,
-                    targetFallbackFilePath = fallbackPath,
-                    enableSkinToneMatch = enableSkinToneMatch,
-                    blendStrength = blendStrength,
-                    inferenceMode = snapshot.preferences.inferenceMode,
-                    onProgress = { prog -> transientState.update { s -> s.copy(generationProgress = prog) } }
-                )
-            }
-
-            result.fold(
-                onSuccess = { swapOut ->
-                    val saved = withContext(Dispatchers.IO) {
-                        creationsRepo.saveCreation(
-                            bitmap = swapOut.swappedBitmap,
-                            userPrompt = "Offline Face Swap (${swapOut.modelSummary})",
-                            finalGenerationInput = "Offline Face Swap",
-                            resolution = "${swapOut.swappedBitmap.width} × ${swapOut.swappedBitmap.height}",
-                            steps = 5,
-                            seed = 0L,
-                            durationMs = swapOut.durationMs
-                        )
-                    }
-                    val all = withContext(Dispatchers.IO) { creationsRepo.loadAllCreations() }
-                    val m = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
-                    transientState.update {
-                        it.copy(
-                            isGenerating = false,
-                            generationProgress = null,
-                            creations = all,
-                            latestGeneratedCreation = saved,
-                            latestFaceSwapCreation = saved,
-                            latestFaceSwapTargetPreviewPath = swapOut.targetPreviewFile.absolutePath,
-                            metrics = m,
-                            statusToastMessage = "Face swapped offline in ${swapOut.durationMs / 1000.0}s!"
-                        )
-                    }
-                },
-                onFailure = { err -> handlePipelineFailure(err) }
-            )
-        }
-    }
-
     // Phase 6C: Offline Image Editor Actions
     fun setEditorImageUri(uri: Uri?) {
         transientState.update {
@@ -923,8 +808,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     creations = updated,
                     latestGeneratedCreation = state.latestGeneratedCreation?.let { l -> updated.firstOrNull { it.id == l.id } ?: l },
                     latestImg2ImgCreation = state.latestImg2ImgCreation?.let { l -> updated.firstOrNull { it.id == l.id } ?: l },
-                    latestCharacterCreation = state.latestCharacterCreation?.let { l -> updated.firstOrNull { it.id == l.id } ?: l },
-                    latestFaceSwapCreation = state.latestFaceSwapCreation?.let { l -> updated.firstOrNull { it.id == l.id } ?: l }
+                    latestCharacterCreation = state.latestCharacterCreation?.let { l -> updated.firstOrNull { it.id == l.id } ?: l }
                 )
             }
         }
@@ -939,7 +823,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     latestGeneratedCreation = if (state.latestGeneratedCreation?.id == id) updated.firstOrNull() else state.latestGeneratedCreation,
                     latestImg2ImgCreation = if (state.latestImg2ImgCreation?.id == id) null else state.latestImg2ImgCreation,
                     latestCharacterCreation = if (state.latestCharacterCreation?.id == id) null else state.latestCharacterCreation,
-                    latestFaceSwapCreation = if (state.latestFaceSwapCreation?.id == id) null else state.latestFaceSwapCreation,
                     latestEditedCreation = if (state.latestEditedCreation?.id == id) null else state.latestEditedCreation,
                     statusToastMessage = "Deleted image."
                 )

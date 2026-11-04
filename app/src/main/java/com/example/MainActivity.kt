@@ -45,7 +45,6 @@ import com.example.ui.components.GlassBottomNavBar
 import com.example.ui.screens.CharacterStudioScreen
 import com.example.ui.screens.ContentSafetySettingsScreen
 import com.example.ui.screens.CreationsCollectionScreen
-import com.example.ui.screens.FaceSwapScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.ImageEditorScreen
 import com.example.ui.screens.ImageToImageScreen
@@ -57,8 +56,6 @@ import com.example.ui.theme.MyApplicationTheme
 private enum class PhotoPickTarget {
     IMG2IMG_REFERENCE,
     CHARACTER_REFERENCE,
-    FACESWAP_SOURCE,
-    FACESWAP_TARGET,
     IMAGE_EDITOR_SOURCE
 }
 
@@ -152,8 +149,6 @@ fun ImageGeneratorRoot(
             when (photoPickTarget) {
                 PhotoPickTarget.IMG2IMG_REFERENCE -> appViewModel.updateSelectedInputPhoto(photoUri)
                 PhotoPickTarget.CHARACTER_REFERENCE -> appViewModel.setPendingCharacterPhotoUri(photoUri)
-                PhotoPickTarget.FACESWAP_SOURCE -> appViewModel.setFaceSwapSourceUri(photoUri)
-                PhotoPickTarget.FACESWAP_TARGET -> appViewModel.setFaceSwapTargetUri(photoUri)
                 PhotoPickTarget.IMAGE_EDITOR_SOURCE -> appViewModel.setEditorImageUri(photoUri)
             }
         }
@@ -422,35 +417,6 @@ fun ImageGeneratorRoot(
                                 },
                                 onOpenContentSafetySettings = {
                                     appViewModel.navigateToScreen(ActiveScreen.CONTENT_SAFETY_SETTINGS)
-                                },
-                                onBack = { appViewModel.navigateBackToHome() }
-                            )
-
-                            ActiveScreen.FACE_SWAP -> FaceSwapScreen(
-                                preferences = uiState.preferences,
-                                metrics = uiState.metrics,
-                                sourceFaceUri = uiState.faceSwapSourceUri,
-                                targetImageUri = uiState.faceSwapTargetUri,
-                                targetFallbackCreation = uiState.latestGeneratedCreation,
-                                useLatestCreationAsTarget = uiState.useLatestCreationAsFaceSwapTarget,
-                                isSwapping = uiState.isGenerating,
-                                progress = uiState.generationProgress,
-                                latestFaceSwapCreation = uiState.latestFaceSwapCreation,
-                                latestFaceSwapTargetPreviewPath = uiState.latestFaceSwapTargetPreviewPath,
-                                errorMessage = uiState.generationErrorMessage,
-                                onPickSourceFace = {
-                                    launchPhotoPicker(PhotoPickTarget.FACESWAP_SOURCE)
-                                },
-                                onPickTargetPhoto = {
-                                    launchPhotoPicker(PhotoPickTarget.FACESWAP_TARGET)
-                                },
-                                onUseLatestCreationAsTarget = appViewModel::useLatestCreationAsFaceSwapTarget,
-                                onRunFaceSwap = appViewModel::runOfflineFaceSwap,
-                                onCancelSwap = appViewModel::cancelGeneration,
-                                onExportToGallery = appViewModel::exportCreationToGallery,
-                                onToggleFavorite = appViewModel::toggleFavoriteCreation,
-                                onOpenModelsTab = {
-                                    appViewModel.selectBottomTab(BottomNavTab.MODELS)
                                 },
                                 onBack = { appViewModel.navigateBackToHome() }
                             )

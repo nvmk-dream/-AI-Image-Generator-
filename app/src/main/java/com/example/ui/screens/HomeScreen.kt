@@ -10,10 +10,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -26,13 +26,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
-import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.AutoFixNormal
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Collections
+import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.SyncAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -56,25 +56,12 @@ import com.example.data.ActiveDiffusionEngine
 import com.example.data.AppPreferencesState
 import com.example.ui.ActiveScreen
 import com.example.ui.components.CircularGlowIconButton
-import com.example.ui.components.FeatureGlowCard
+import com.example.ui.components.FeaturePhotoBannerCard
 import com.example.ui.components.PaletteAppLogo
-import com.example.ui.theme.AmberGlowEnd
-import com.example.ui.theme.AmberGlowStart
-import com.example.ui.theme.BlueGlowEnd
-import com.example.ui.theme.BlueGlowStart
 import com.example.ui.theme.DancingScriptFontFamily
-import com.example.ui.theme.GreenGlowEnd
-import com.example.ui.theme.GreenGlowStart
-import com.example.ui.theme.MagentaGlowEnd
-import com.example.ui.theme.MagentaGlowStart
 import com.example.ui.theme.NeonReadyGreen
-import com.example.ui.theme.PinkGlowEnd
-import com.example.ui.theme.PinkGlowStart
-import com.example.ui.theme.PurpleActionEnd
 import com.example.ui.theme.RoyalIndigoTitle
 import com.example.ui.theme.SoftAmberStatus
-import com.example.ui.theme.TealGlowEnd
-import com.example.ui.theme.TealGlowStart
 
 @Composable
 fun HomeScreen(
@@ -167,7 +154,7 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // 2x3 Feature Cards Grid
+            // 2x3 Natural Realistic Photo Banner Cards Grid
             Column(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxWidth()
@@ -177,124 +164,66 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    FeatureGlowCard(
-                        title = if (isTamil) "Text to\nImage" else "Text to\nImage",
-                        gradientStart = PinkGlowStart,
-                        gradientEnd = PinkGlowEnd,
+                    FeaturePhotoBannerCard(
+                        title = "Text to\nImage",
+                        imageResId = R.drawable.img_card_text_to_image,
                         testTag = "card_text_to_image",
                         onClick = { onSelectFeature(ActiveScreen.TEXT_TO_IMAGE) },
                         modifier = Modifier.weight(1f)
-                    ) {
-                        FramedIconBadge(
-                            bgStart = Color(0xFF4FC3F7),
-                            bgEnd = Color(0xFF1976D2),
-                            mainIcon = Icons.Filled.Image
-                        )
-                    }
+                    )
 
-                    FeatureGlowCard(
-                        title = if (isTamil) "Image to\nImage" else "Image to\nImage",
-                        gradientStart = BlueGlowStart,
-                        gradientEnd = BlueGlowEnd,
+                    FeaturePhotoBannerCard(
+                        title = "Image to\nImage",
+                        imageResId = R.drawable.img_card_image_to_image,
                         testTag = "card_image_to_image",
                         onClick = { onSelectFeature(ActiveScreen.IMAGE_TO_IMAGE) },
                         modifier = Modifier.weight(1f)
                     ) {
-                        Box(contentAlignment = Alignment.BottomEnd) {
-                            FramedIconBadge(
-                                bgStart = Color(0xFF29B6F6),
-                                bgEnd = Color(0xFF1565C0),
-                                mainIcon = Icons.Filled.Image
-                            )
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(22.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF0D47A1))
-                                    .border(1.dp, Color.White, CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Autorenew,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(13.dp)
+                        // Crisp royal-blue circular double-arrow badge between the two Polaroids
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .size(28.dp)
+                                .shadow(6.dp, CircleShape, spotColor = Color(0xFF1565C0))
+                                .clip(CircleShape)
+                                .background(
+                                    Brush.linearGradient(
+                                        listOf(Color(0xFF1E88E5), Color(0xFF0D47A1))
+                                    )
                                 )
-                            }
+                                .border(1.4.dp, Color.White, CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.SyncAlt,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(15.dp)
+                            )
                         }
                     }
                 }
 
-                // Row 2: Character Studio | Face Swap
+                // Row 2: Character | Avatar Customization (Blank Card — No Operation on Tap)
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    FeatureGlowCard(
-                        title = if (isTamil) "Character\nStudio" else "Character\nStudio",
-                        gradientStart = TealGlowStart,
-                        gradientEnd = TealGlowEnd,
+                    FeaturePhotoBannerCard(
+                        title = "Character",
+                        imageResId = R.drawable.img_card_character_studio,
                         testTag = "card_character_studio",
                         onClick = { onSelectFeature(ActiveScreen.CHARACTER_STUDIO) },
                         modifier = Modifier.weight(1f)
-                    ) {
-                        Image(
-                            painter = painterResource(id = R.drawable.img_character_avatar),
-                            contentDescription = "Character Studio",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(50.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .border(1.2.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(14.dp))
-                        )
-                    }
+                    )
 
-                    FeatureGlowCard(
-                        title = if (isTamil) "Face\nSwap" else "Face\nSwap",
-                        gradientStart = MagentaGlowStart,
-                        gradientEnd = MagentaGlowEnd,
-                        testTag = "card_face_swap",
-                        onClick = { onSelectFeature(ActiveScreen.FACE_SWAP) },
+                    FeaturePhotoBannerCard(
+                        title = "Avatar\nCustomization",
+                        imageResId = R.drawable.img_card_avatar_custom,
+                        testTag = "card_avatar_customization",
+                        onClick = null,
                         modifier = Modifier.weight(1f)
-                    ) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(52.dp)) {
-                            Image(
-                                painter = painterResource(id = R.drawable.img_character_avatar),
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .offset(x = (-8).dp)
-                                    .clip(CircleShape)
-                                    .border(1.dp, Color.White, CircleShape)
-                            )
-                            Image(
-                                painter = painterResource(id = R.drawable.img_hero_portrait),
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .offset(x = 9.dp)
-                                    .clip(CircleShape)
-                                    .border(1.dp, Color.White, CircleShape)
-                            )
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(20.dp)
-                                    .clip(CircleShape)
-                                    .background(PurpleActionEnd)
-                                    .border(1.dp, Color.White, CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.SwapHoriz,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                            }
-                        }
-                    }
+                    )
                 }
 
                 // Row 3: Image Editor | My Gallery
@@ -302,35 +231,67 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    FeatureGlowCard(
-                        title = if (isTamil) "Image\nEditor" else "Image\nEditor",
-                        gradientStart = AmberGlowStart,
-                        gradientEnd = AmberGlowEnd,
+                    FeaturePhotoBannerCard(
+                        title = "Image\nEditor",
+                        imageResId = R.drawable.img_card_image_editor,
                         testTag = "card_image_editor",
                         onClick = { onSelectFeature(ActiveScreen.IMAGE_EDITOR) },
                         modifier = Modifier.weight(1f)
                     ) {
-                        FramedIconBadge(
-                            bgStart = Color(0xFFFFB300),
-                            bgEnd = Color(0xFFEF6C00),
-                            mainIcon = Icons.Filled.AutoFixHigh
+                        // Subtle before/after center split line
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .fillMaxHeight()
+                                .width(1.3.dp)
+                                .background(Color(0xE6FFF8E1))
                         )
+                        // Floating translucent vertical mini-toolbar on the right (Crop, Brush, Eraser, Magic Wand)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 7.dp, end = 11.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(Color(0x9E10162E))
+                                .border(0.8.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(50))
+                                .padding(horizontal = 5.dp, vertical = 5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Crop,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(10.dp)
+                            )
+                            Icon(
+                                imageVector = Icons.Filled.Brush,
+                                contentDescription = null,
+                                tint = Color(0xFFFFCA28),
+                                modifier = Modifier.size(10.dp)
+                            )
+                            Icon(
+                                imageVector = Icons.Filled.AutoFixNormal,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(10.dp)
+                            )
+                            Icon(
+                                imageVector = Icons.Filled.AutoFixHigh,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(10.dp)
+                            )
+                        }
                     }
 
-                    FeatureGlowCard(
-                        title = if (isTamil) "My\nGallery" else "My\nGallery",
-                        gradientStart = GreenGlowStart,
-                        gradientEnd = GreenGlowEnd,
+                    FeaturePhotoBannerCard(
+                        title = "My\nGallery",
+                        imageResId = R.drawable.img_card_my_gallery,
                         testTag = "card_my_gallery",
                         onClick = { onSelectFeature(ActiveScreen.MY_GALLERY) },
                         modifier = Modifier.weight(1f)
-                    ) {
-                        FramedIconBadge(
-                            bgStart = Color(0xFF66BB6A),
-                            bgEnd = Color(0xFF2E7D32),
-                            mainIcon = Icons.Filled.Collections
-                        )
-                    }
+                    )
                 }
             }
 
@@ -418,30 +379,6 @@ private fun HeroWelcomeSection(
                 modifier = Modifier.size(22.dp)
             )
         }
-    }
-}
-
-@Composable
-private fun FramedIconBadge(
-    bgStart: Color,
-    bgEnd: Color,
-    mainIcon: androidx.compose.ui.graphics.vector.ImageVector
-) {
-    val shape = RoundedCornerShape(14.dp)
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(48.dp)
-            .clip(shape)
-            .background(Brush.linearGradient(listOf(bgStart, bgEnd)))
-            .border(1.4.dp, Color.White.copy(alpha = 0.9f), shape)
-    ) {
-        Icon(
-            imageVector = mainIcon,
-            contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier.size(27.dp)
-        )
     }
 }
 

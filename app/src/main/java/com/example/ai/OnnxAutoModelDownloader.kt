@@ -552,7 +552,6 @@ class OnnxAutoModelDownloader(
             DedicatedModelSlot.TOKENIZER -> {
                 File(slotDir, "source_name.meta").writeText("vocab.json + merges.txt")
             }
-            else -> Unit
         }
     }
 
@@ -569,8 +568,7 @@ class OnnxAutoModelDownloader(
         private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
 
         /**
-         * Strictly covers ONLY the 8 Core Slots (1A, 1B, 2A, 2B, 3, 4, 5, 6) requested by the user.
-         * Optional Face Swap models are intentionally excluded from First-Launch Auto-Download.
+         * Strictly covers all 8 Core Slots (1A, 1B, 2A, 2B, 3, 4, 5, 6).
          *
          * Note on `executionPriority`:
          * Downloads Fast LCM + Shared Core (1A -> 1B -> 3 -> 4 -> 5 -> 6, ~1.69 GB total) FIRST so

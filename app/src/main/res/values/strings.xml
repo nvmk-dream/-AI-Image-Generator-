@@ -10,8 +10,8 @@
     <string name="settings_title">Settings</string>
     <string name="card_text_to_image">Text to\nImage</string>
     <string name="card_image_to_image">Image to\nImage</string>
-    <string name="card_character_studio">Character\nStudio</string>
-    <string name="card_face_swap">Face\nSwap</string>
+    <string name="card_character_studio">Character</string>
+    <string name="card_avatar_customization">Avatar\nCustomization</string>
     <string name="card_image_editor">Image\nEditor</string>
     <string name="card_my_gallery">My\nGallery</string>
     <string name="cd_app_logo">Image Generator App Logo</string>

@@ -183,13 +183,13 @@ object OnnxModelDownloadCatalog {
             )
         ),
         OnnxDownloadGroup(
-            id = "extra_core_and_faceswap",
-            badgeLabelEn = "CORE & FACE SWAP ADD-ONS",
-            badgeLabelTa = "மற்ற மாடல்கள் & Face Swap",
-            titleEn = "Core Encoders & Face Swap ONNX Links",
-            titleTa = "மற்ற Core & Face Swap ONNX மாடல்கள்",
-            descriptionEn = "Optional links if you ever need Text Encoder, VAE Decoder/Encoder, or Face Swap ONNX files.",
-            descriptionTa = "Text Encoder, VAE அல்லது Face Swap மாடல்கள் தேவைப்பட்டால் இங்கே பதிவிறக்கலாம்.",
+            id = "extra_core_encoders",
+            badgeLabelEn = "CORE ENCODERS & TOKENIZER",
+            badgeLabelTa = "மற்ற Core மாடல்கள் (Text Encoder & VAE)",
+            titleEn = "Core Encoders & Tokenizer ONNX Links",
+            titleTa = "மற்ற Core ONNX மாடல்கள் (CLIP & VAE)",
+            descriptionEn = "Optional links if you ever need Text Encoder, VAE Decoder/Encoder, or Tokenizer ONNX files.",
+            descriptionTa = "Text Encoder, VAE Decoder/Encoder அல்லது Tokenizer மாடல்கள் தேவைப்பட்டால் இங்கே பதிவிறக்கலாம்.",
             isRecommended = false,
             links = listOf(
                 OnnxDownloadLinkItem(
@@ -200,26 +200,6 @@ object OnnxModelDownloadCatalog {
                     subtitleTa = "text_encoder, vae_decoder, vae_encoder & tokenizer ஃபைல்கள்",
                     sizeBadge = "Repo",
                     url = "https://huggingface.co/onnx-community/stable-diffusion-v1-5-ONNX/tree/main",
-                    isDirectFile = false
-                ),
-                OnnxDownloadLinkItem(
-                    id = "faceswap_inswapper_repo",
-                    titleEn = "InSwapper 128 ONNX (Face Swap)",
-                    titleTa = "InSwapper 128 ONNX (முகம் மாற்றும் மாடல்)",
-                    subtitleEn = "inswapper_128.onnx for offline Face Swap slot #7",
-                    subtitleTa = "Face Swap மாடல் #7-க்கான inswapper_128.onnx",
-                    sizeBadge = "~529 MB",
-                    url = "https://huggingface.co/ezioruan/inswapper_128.onnx/tree/main",
-                    isDirectFile = false
-                ),
-                OnnxDownloadLinkItem(
-                    id = "faceswap_buffalo_l_repo",
-                    titleEn = "InsightFace Buffalo_L (det_10g & w600k_r50)",
-                    titleTa = "Face Detector & Identity (det_10g & w600k_r50)",
-                    subtitleEn = "SCRFD det_10g.onnx + ArcFace w600k_r50.onnx models",
-                    subtitleTa = "Face Swap மாடல் #5 மற்றும் #6 ஃபைல்கள்",
-                    sizeBadge = "Repo",
-                    url = "https://huggingface.co/public-data/insightface/tree/main/models/buffalo_l",
                     isDirectFile = false
                 )
             )

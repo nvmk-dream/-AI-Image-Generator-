@@ -159,14 +159,6 @@ class OnnxDiffusionEngine(
             "✅ Slot 6 Tokenizer -> ${if (hasCustomTok) "Custom vocab.json & merges.txt" else "Built-in CLIP vocab.json & merges.txt"} (${tokIds.size} tokens)"
         )
 
-        for (slot in listOf(DiffusionModelSlot.FACE_DETECTOR, DiffusionModelSlot.FACE_RECOGNIZER, DiffusionModelSlot.FACE_SWAPPER)) {
-            currentCoroutineContext().ensureActive()
-            val f = modelManager.resolveExistingSlotFile(slot)
-            if (f != null) {
-                verifyOnnxTarget(slot.canonicalFileName, f)
-            }
-        }
-
         if (verifiedCount == 0 && incompleteCount == 0) {
             error("No .onnx files installed yet. Open Models tab to upload individual slots or select your IG folder.")
         }

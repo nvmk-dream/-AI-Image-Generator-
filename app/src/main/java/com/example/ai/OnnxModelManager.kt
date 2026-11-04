@@ -18,8 +18,7 @@ import java.util.concurrent.ConcurrentHashMap
 enum class DedicatedSlotGroup {
     FAST_LCM_ENGINE,
     STANDARD_SD_ENGINE,
-    ESSENTIAL_SHARED,
-    OPTIONAL_FACE_SWAP
+    ESSENTIAL_SHARED
 }
 
 enum class DedicatedModelSlot(
@@ -111,40 +110,10 @@ enum class DedicatedModelSlot(
         titleTa = "Slot 6: Tokenizer (vocab.json & merges.txt ~1 MB)",
         descriptionEn = "CLIP vocabulary & merges (~1 MB • built-in backup also active)",
         descriptionTa = "vocab.json & merges.txt (~1 MB • Built-in துணையும் தயாராக உள்ளது)"
-    ),
-    FACE_DETECTOR(
-        slotTag = "det_10g",
-        folderName = "detection",
-        group = DedicatedSlotGroup.OPTIONAL_FACE_SWAP,
-        expectedFileHint = "det_10g.onnx (~16 MB)",
-        titleEn = "Face Detector (det_10g)",
-        titleTa = "Face Detector (det_10g • முகம் கண்டறியும் மாடல்)",
-        descriptionEn = "SCRFD 5-point landmark detector for Offline Face Swap",
-        descriptionTa = "புகைப்படத்தில் உள்ள முகம் & 5 புள்ளிகளைத் துல்லியமாகக் கண்டறியும்"
-    ),
-    FACE_RECOGNIZER(
-        slotTag = "w600k_r50",
-        folderName = "recognition",
-        group = DedicatedSlotGroup.OPTIONAL_FACE_SWAP,
-        expectedFileHint = "w600k_r50.onnx (~166 MB)",
-        titleEn = "Face Identity (w600k_r50)",
-        titleTa = "Face Identity (w600k_r50 • முக அடையாள மாடல்)",
-        descriptionEn = "512-D ArcFace source identity extractor",
-        descriptionTa = "Source புகைப்படத்தின் முக சாயலை 512-D அடையாளமாகப் பிரித்தெடுக்கும்"
-    ),
-    FACE_SWAPPER(
-        slotTag = "inswapper_128",
-        folderName = "face_swap",
-        group = DedicatedSlotGroup.OPTIONAL_FACE_SWAP,
-        expectedFileHint = "inswapper_128.onnx / hyperswap (~529 MB)",
-        titleEn = "Face Swapper (InSwapper / HyperSwap)",
-        titleTa = "Face Swapper (inswapper_128 / hyperswap)",
-        descriptionEn = "Supports inswapper_128.onnx & hyperswap_1b_256.onnx",
-        descriptionTa = "inswapper_128.onnx அல்லது hyperswap_1b_256.onnx மூலம் முகம் மாற்றும்"
     );
 
     val isCoreSlot: Boolean
-        get() = group != DedicatedSlotGroup.OPTIONAL_FACE_SWAP
+        get() = true
 }
 
 data class DedicatedSlotStatus(
@@ -181,8 +150,7 @@ enum class DiffusionModelSlot(
     val titleTa: String,
     val descriptionEn: String,
     val descriptionTa: String,
-    val requiredForTxt2Img: Boolean,
-    val isFaceSwapSlot: Boolean = false
+    val requiredForTxt2Img: Boolean
 ) {
     TEXT_ENCODER(
         canonicalFileName = "text_encoder.onnx",
@@ -223,39 +191,6 @@ enum class DiffusionModelSlot(
         descriptionEn = "Encodes reference photo for Image-to-Image",
         descriptionTa = "Image-to-Image மாற்றத்திற்காக பழைய படத்தை உள்ளே எடுக்கும்",
         requiredForTxt2Img = false
-    ),
-    FACE_DETECTOR(
-        canonicalFileName = "det_10g.onnx",
-        folderHint = "detection",
-        matchKeywords = listOf("det_10g", "det_2.5g", "scrfd"),
-        titleEn = "5. Face Detector (det_10g)",
-        titleTa = "5. Face Detector (முகம் கண்டறியும் மாடல்)",
-        descriptionEn = "SCRFD 5-point landmark detector for Face Swap",
-        descriptionTa = "புகைப்படத்தில் உள்ள முகம் & 5 புள்ளிகளைத் துல்லியமாகக் கண்டறியும்",
-        requiredForTxt2Img = false,
-        isFaceSwapSlot = true
-    ),
-    FACE_RECOGNIZER(
-        canonicalFileName = "w600k_r50.onnx",
-        folderHint = "recognition",
-        matchKeywords = listOf("w600k_r50", "w600k_mbf", "arcface"),
-        titleEn = "6. Face Identity (w600k_r50)",
-        titleTa = "6. Face Identity (முக அடையாள மாடல்)",
-        descriptionEn = "512-D ArcFace source identity extractor",
-        descriptionTa = "Source புகைப்படத்தின் முக சாயலை 512-D அடையாளமாகப் பிரித்தெடுக்கும்",
-        requiredForTxt2Img = false,
-        isFaceSwapSlot = true
-    ),
-    FACE_SWAPPER(
-        canonicalFileName = "inswapper_128.onnx",
-        folderHint = "face_swap",
-        matchKeywords = listOf("inswapper", "hyperswap"),
-        titleEn = "7. Face Swapper (InSwapper / HyperSwap)",
-        titleTa = "7. Face Swapper (முகம் மாற்றும் மாடல்)",
-        descriptionEn = "Supports inswapper_128.onnx & hyperswap_1b_256.onnx",
-        descriptionTa = "inswapper_128.onnx அல்லது hyperswap_1b_256.onnx மூலம் முகம் மாற்றும்",
-        requiredForTxt2Img = false,
-        isFaceSwapSlot = true
     )
 }
 
@@ -332,9 +267,6 @@ data class RealDeviceAndModelMetrics(
 
     val essentialSharedDedicatedSlots: List<DedicatedSlotStatus>
         get() = dedicatedSlots.filter { it.slot.group == DedicatedSlotGroup.ESSENTIAL_SHARED }
-
-    val faceSwapDedicatedSlots: List<DedicatedSlotStatus>
-        get() = dedicatedSlots.filter { it.slot.group == DedicatedSlotGroup.OPTIONAL_FACE_SWAP }
 
     val coreInstalledCount: Int
         get() = coreDedicatedSlots.count { it.isInstalled }
@@ -452,10 +384,7 @@ data class RealDeviceAndModelMetrics(
     }
 
     val diffusionSlots: List<ModelSlotStatus>
-        get() = slots.filter { !it.slot.isFaceSwapSlot }
-
-    val faceSwapSlots: List<ModelSlotStatus>
-        get() = slots.filter { it.slot.isFaceSwapSlot }
+        get() = slots
 
     val unetSlotStatus: ModelSlotStatus?
         get() = slots.firstOrNull { it.slot == DiffusionModelSlot.UNET }
@@ -491,11 +420,6 @@ data class RealDeviceAndModelMetrics(
     val installedCount: Int
         get() = diffusionSlots.count { it.isInstalled }
 
-    val faceSwapInstalledCount: Int
-        get() = faceSwapDedicatedSlots.count { it.isInstalled }.let { c ->
-            if (c > 0 || dedicatedSlots.isNotEmpty()) c else faceSwapSlots.count { it.isInstalled }
-        }
-
     val totalInstalledCount: Int
         get() = dedicatedSlots.count { it.isInstalled }
 
@@ -517,15 +441,6 @@ data class RealDeviceAndModelMetrics(
         get() = isImg2ImgReadyFor(ActiveDiffusionEngine.FAST_LCM) ||
             isImg2ImgReadyFor(ActiveDiffusionEngine.STANDARD_SD) ||
             (diffusionSlots.isNotEmpty() && diffusionSlots.all { it.isInstalled })
-
-    val isFaceSwapReady: Boolean
-        get() {
-            val detOk = dedicatedSlots.any { it.slot == DedicatedModelSlot.FACE_DETECTOR && it.isInstalled } ||
-                slots.any { it.slot == DiffusionModelSlot.FACE_DETECTOR && it.isInstalled }
-            val swapOk = dedicatedSlots.any { it.slot == DedicatedModelSlot.FACE_SWAPPER && it.isInstalled } ||
-                slots.any { it.slot == DiffusionModelSlot.FACE_SWAPPER && it.isInstalled }
-            return detOk && swapOk
-        }
 }
 
 class OnnxModelManager(private val context: Context) {
@@ -918,14 +833,11 @@ class OnnxModelManager(private val context: Context) {
             )
         )
 
-        // Slots 3, 4, 5 + Face Swap Slots (Self-contained ONNX slots)
+        // Slots 3, 4, 5 (Self-contained ONNX slots)
         val standaloneMapping = listOf(
             DedicatedModelSlot.TEXT_ENCODER to DiffusionModelSlot.TEXT_ENCODER,
             DedicatedModelSlot.VAE_DECODER to DiffusionModelSlot.VAE_DECODER,
-            DedicatedModelSlot.VAE_ENCODER to DiffusionModelSlot.VAE_ENCODER,
-            DedicatedModelSlot.FACE_DETECTOR to DiffusionModelSlot.FACE_DETECTOR,
-            DedicatedModelSlot.FACE_RECOGNIZER to DiffusionModelSlot.FACE_RECOGNIZER,
-            DedicatedModelSlot.FACE_SWAPPER to DiffusionModelSlot.FACE_SWAPPER
+            DedicatedModelSlot.VAE_ENCODER to DiffusionModelSlot.VAE_ENCODER
         )
         for ((dedSlot, diffSlot) in standaloneMapping) {
             val file = resolveExistingSlotFile(diffSlot)
@@ -937,7 +849,7 @@ class OnnxModelManager(private val context: Context) {
                 ?.readText()?.trim().orEmpty().ifBlank { file?.name ?: dedSlot.expectedFileHint }
             val bytes = file?.length() ?: 0L
 
-            // Insert Slot 6 (Tokenizer) right after Slot 5 (VAE_ENCODER) so order matches enum 1..6 + FaceSwap
+            // Insert Slot 6 (Tokenizer) right after Slot 5 (VAE_ENCODER) so order matches enum 1..6
             result.add(
                 DedicatedSlotStatus(
                     slot = dedSlot,
@@ -1003,7 +915,7 @@ class OnnxModelManager(private val context: Context) {
 
     /**
      * Purges stray duplicate external weights accidentally copied alongside self-contained
-     * non-UNet slots (Slots 3, 4, 5 & Face Swap), without ever touching unet_fast_lcm or
+     * non-UNet slots (Slots 3, 4, 5), without ever touching unet_fast_lcm or
      * unet_standard_sd (where weights may legitimately be uploaded before model.onnx!).
      */
     private fun purgeOrphanedDuplicateWeights() {
@@ -1027,7 +939,7 @@ class OnnxModelManager(private val context: Context) {
     }
 
     /**
-     * Uploads a single file into any of the Dedicated Split Slots (1A, 1B, 2A, 2B, 3, 4, 5, or Face Swap),
+     * Uploads a single file into any of the Dedicated Split Slots (1A, 1B, 2A, 2B, 3, 4, 5, or 6),
      * supporting any upload order (e.g. 1B before 1A, or 2B wights.pb before 2A model.onnx) and
      * automatically linking the pair in the shared engine folder!
      */
@@ -1169,17 +1081,10 @@ class OnnxModelManager(private val context: Context) {
             }
 
             else -> {
-                // Standalone ONNX model slots: Slot 3, Slot 4, Slot 5, and Optional Face Swap slots
+                // Standalone ONNX model slots: Slot 3, Slot 4, Slot 5
                 ensureEnoughFreeSpace(expectedTotal)
                 targetDir.listFiles()?.forEach { it.delete() }
-                val chosenName = if (effectiveSlot == DedicatedModelSlot.FACE_SWAPPER &&
-                    normalizedHint.contains("hyperswap", ignoreCase = true)
-                ) {
-                    "hyperswap_256.onnx"
-                } else {
-                    "model.onnx"
-                }
-                val destFile = File(targetDir, chosenName)
+                val destFile = File(targetDir, "model.onnx")
                 val displayLabel = rawHint.ifBlank { effectiveSlot.expectedFileHint }
                 copyUriToFile(uri, destFile, expectedTotal) { copied, total ->
                     onProgress?.invoke(formatCopyProgress(displayLabel, copied, total))
@@ -1190,9 +1095,6 @@ class OnnxModelManager(private val context: Context) {
                 }
                 if (rawHint.isNotBlank()) {
                     File(targetDir, "source_name.meta").writeText(rawHint)
-                }
-                if (effectiveSlot == DedicatedModelSlot.FACE_SWAPPER) {
-                    File(modelsRootDir, "inswapper_emap_512x512.bin").delete()
                 }
                 effectiveSlot to destFile.length()
             }
@@ -1300,10 +1202,6 @@ class OnnxModelManager(private val context: Context) {
             File(legacyInternalRootDir, "vocab.json").delete()
             File(legacyInternalRootDir, "merges.txt").delete()
         }
-        if (slot == DedicatedModelSlot.FACE_SWAPPER) {
-            File(modelsRootDir, "inswapper_emap_512x512.bin").delete()
-            File(legacyInternalRootDir, "inswapper_emap_512x512.bin").delete()
-        }
     }
 
     // Legacy compatibility wrappers
@@ -1318,9 +1216,6 @@ class OnnxModelManager(private val context: Context) {
             DiffusionModelSlot.UNET -> DedicatedModelSlot.FAST_LCM_GRAPH
             DiffusionModelSlot.VAE_DECODER -> DedicatedModelSlot.VAE_DECODER
             DiffusionModelSlot.VAE_ENCODER -> DedicatedModelSlot.VAE_ENCODER
-            DiffusionModelSlot.FACE_DETECTOR -> DedicatedModelSlot.FACE_DETECTOR
-            DiffusionModelSlot.FACE_RECOGNIZER -> DedicatedModelSlot.FACE_RECOGNIZER
-            DiffusionModelSlot.FACE_SWAPPER -> DedicatedModelSlot.FACE_SWAPPER
         }
         return importDedicatedSlotFromUri(uri, mapped, originalNameHint, onProgress).map { it.second }
     }
@@ -1419,7 +1314,7 @@ class OnnxModelManager(private val context: Context) {
      * Upgraded One-Touch Folder Auto-Import (supports Phone > IG flat folder with browser-renamed
      * files like model.onnx, model (1).onnx, model (3).onnx, model (7).onnx, model (8).onnx,
      * model_int8.onnx.data, weights.pb / wights.pb, vocab.json, merges.txt, as well as nested
-     * Hugging Face folders and optional Face Swap models).
+     * Hugging Face folders).
      * Automatically populates ALL 8 Core Dedicated Split Slots cleanly!
      */
     fun importAllModelsFromFolder(
@@ -1480,7 +1375,7 @@ class OnnxModelManager(private val context: Context) {
         val importedDedicated = mutableListOf<DedicatedModelSlot>()
         var skippedLowSpaceNote = ""
 
-        // Import order: Fast LCM (1A, 1B) + Essential Shared (3, 4, 5, 6) + Face Swap FIRST,
+        // Import order: Fast LCM (1A, 1B) + Essential Shared (3, 4, 5, 6) FIRST,
         // then Standard SD (2A, 2B) so a huge 3.44 GB weights.pb never starves Fast LCM on 64GB phones!
         val orderedSlots = listOf(
             DedicatedModelSlot.FAST_LCM_GRAPH,
@@ -1489,9 +1384,6 @@ class OnnxModelManager(private val context: Context) {
             DedicatedModelSlot.VAE_DECODER,
             DedicatedModelSlot.VAE_ENCODER,
             DedicatedModelSlot.TOKENIZER,
-            DedicatedModelSlot.FACE_DETECTOR,
-            DedicatedModelSlot.FACE_RECOGNIZER,
-            DedicatedModelSlot.FACE_SWAPPER,
             DedicatedModelSlot.STANDARD_SD_GRAPH,
             DedicatedModelSlot.STANDARD_SD_WEIGHTS
         )
@@ -1556,9 +1448,6 @@ class OnnxModelManager(private val context: Context) {
         if (fastLink.isPairLinked || stdLink.isPairLinked) legacyImported.add(DiffusionModelSlot.UNET)
         if (DedicatedModelSlot.VAE_DECODER in importedDedicated) legacyImported.add(DiffusionModelSlot.VAE_DECODER)
         if (DedicatedModelSlot.VAE_ENCODER in importedDedicated) legacyImported.add(DiffusionModelSlot.VAE_ENCODER)
-        if (DedicatedModelSlot.FACE_DETECTOR in importedDedicated) legacyImported.add(DiffusionModelSlot.FACE_DETECTOR)
-        if (DedicatedModelSlot.FACE_RECOGNIZER in importedDedicated) legacyImported.add(DiffusionModelSlot.FACE_RECOGNIZER)
-        if (DedicatedModelSlot.FACE_SWAPPER in importedDedicated) legacyImported.add(DiffusionModelSlot.FACE_SWAPPER)
 
         val primaryVariant = when {
             fastLink.isPairLinked -> UnetVariant.FAST_LCM_INT8
@@ -1649,10 +1538,6 @@ class OnnxModelManager(private val context: Context) {
         }
         File(modelsRootDir, slot.canonicalFileName).delete()
         File(legacyInternalRootDir, slot.canonicalFileName).delete()
-        if (slot == DiffusionModelSlot.FACE_SWAPPER) {
-            File(modelsRootDir, "inswapper_emap_512x512.bin").delete()
-            File(legacyInternalRootDir, "inswapper_emap_512x512.bin").delete()
-        }
     }
 
     fun deleteAllModels() {
@@ -2080,7 +1965,7 @@ class OnnxModelManager(private val context: Context) {
         }
 
         /**
-         * Resolves all 8 Core Dedicated Split Slots + 3 Optional Face Swap Slots simultaneously
+         * Resolves all 8 Core Dedicated Split Slots simultaneously
          * from a flat folder (`Phone > IG`) or nested Hugging Face folder tree!
          */
         fun resolveSplitFolderMatches(allFiles: List<DiscoveredFolderFile>): SplitFolderMatchPlan {
@@ -2098,10 +1983,7 @@ class OnnxModelManager(private val context: Context) {
             val explicitNonUnet = listOf(
                 DedicatedModelSlot.TEXT_ENCODER to DiffusionModelSlot.TEXT_ENCODER,
                 DedicatedModelSlot.VAE_DECODER to DiffusionModelSlot.VAE_DECODER,
-                DedicatedModelSlot.VAE_ENCODER to DiffusionModelSlot.VAE_ENCODER,
-                DedicatedModelSlot.FACE_DETECTOR to DiffusionModelSlot.FACE_DETECTOR,
-                DedicatedModelSlot.FACE_RECOGNIZER to DiffusionModelSlot.FACE_RECOGNIZER,
-                DedicatedModelSlot.FACE_SWAPPER to DiffusionModelSlot.FACE_SWAPPER
+                DedicatedModelSlot.VAE_ENCODER to DiffusionModelSlot.VAE_ENCODER
             )
             for ((dedSlot, diffSlot) in explicitNonUnet) {
                 val match = onnxCandidates.firstOrNull { cand ->
@@ -2480,7 +2362,7 @@ class OnnxModelManager(private val context: Context) {
                 }
                 if (found != null) {
                     claimed.add(found.index)
-                    if (!slot.isFaceSwapSlot) coreParents.add(found.parentNameLower)
+                    coreParents.add(found.parentNameLower)
                 }
             }
             return collectEligibleUnetCandidates(candidates, claimed, coreParents, allFileNamesByParent).size >= 2
@@ -2610,7 +2492,6 @@ class OnnxModelManager(private val context: Context) {
             }
 
             val coreMatchedParents = matched.entries
-                .filter { !it.key.isFaceSwapSlot }
                 .mapNotNull { entry -> candidates.firstOrNull { it.index == entry.value }?.parentNameLower }
                 .toSet()
 

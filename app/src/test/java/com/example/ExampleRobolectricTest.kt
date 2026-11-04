@@ -112,4 +112,53 @@ class ExampleRobolectricTest {
             .performScrollTo()
             .assertIsDisplayed()
     }
+
+    @Test
+    fun `home screen displays 6 realistic cards without face swap and avatar customization is blank`() {
+        var navigatedScreen: com.example.ui.ActiveScreen? = null
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = false) {
+                com.example.ui.screens.HomeScreen(
+                    preferences = AppPreferencesState(),
+                    metrics = RealDeviceAndModelMetrics(),
+                    onOpenSettings = {},
+                    onSelectFeature = { navigatedScreen = it },
+                    onOpenModelsTab = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        // Face Swap card must be completely removed
+        composeTestRule.onNodeWithTag("card_face_swap").assertDoesNotExist()
+
+        // All 6 realistic feature cards must exist and render
+        val expectedTags = listOf(
+            "card_text_to_image",
+            "card_image_to_image",
+            "card_character_studio",
+            "card_avatar_customization",
+            "card_image_editor",
+            "card_my_gallery"
+        )
+        for (tag in expectedTags) {
+            composeTestRule.onNodeWithTag(tag)
+                .performScrollTo()
+                .assertIsDisplayed()
+        }
+
+        // Tapping Avatar Customization must perform NO navigation (blank card)
+        composeTestRule.onNodeWithTag("card_avatar_customization")
+            .performScrollTo()
+            .performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(null, navigatedScreen)
+
+        // Tapping Text to Image navigates normally
+        composeTestRule.onNodeWithTag("card_text_to_image")
+            .performScrollTo()
+            .performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(com.example.ui.ActiveScreen.TEXT_TO_IMAGE, navigatedScreen)
+    }
 }

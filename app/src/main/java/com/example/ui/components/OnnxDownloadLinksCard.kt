@@ -187,9 +187,9 @@ fun OnnxDownloadLinksCard(
             ) {
                 Text(
                     text = if (isTamil) {
-                        if (showExtraModels) "மற்ற Core & Face Swap Links மறை" else "மற்ற Core & Face Swap மாடல் Links காட்டு"
+                        if (showExtraModels) "மற்ற Core மாடல் Links மறை" else "மற்ற Core மாடல் Links காட்டு"
                     } else {
-                        if (showExtraModels) "Hide Core & Face Swap Links" else "Show Core Encoders & Face Swap Links"
+                        if (showExtraModels) "Hide Standard SD & Core Links" else "Show Standard SD & Core Links"
                     },
                     color = primaryTextColor,
                     style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),

@@ -352,7 +352,7 @@ fun ModelsTabScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Core Slots: ${metrics.coreInstalledCount}/8 • Face Swap: ${metrics.faceSwapInstalledCount}/3 • Disk: ${OnnxModelManager.formatBytes(metrics.totalModelBytes)} • Free: ${OnnxModelManager.formatBytes(metrics.deviceFreeBytes)}",
+                    text = "Core Slots: ${metrics.coreInstalledCount}/8 • Disk: ${OnnxModelManager.formatBytes(metrics.totalModelBytes)} • Free: ${OnnxModelManager.formatBytes(metrics.deviceFreeBytes)}",
                     color = subColor,
                     style = MaterialTheme.typography.labelLarge
                 )
@@ -437,31 +437,6 @@ fun ModelsTabScreen(
                             onDedicatedSlotUpload(slotStatus.slot)
                         }
                     },
-                    onDeleteClick = { onDeleteDedicatedSlot(slotStatus.slot) }
-                )
-            }
-
-            // 4. Separate Optional Face Swap Models Section (3)
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = if (isTamil) {
-                    "Optional Face Swap மாடல்கள் (${metrics.faceSwapInstalledCount}/3)"
-                } else {
-                    "Optional Face Swap Models (${metrics.faceSwapInstalledCount}/3)"
-                },
-                color = textColor,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
-            )
-
-            metrics.faceSwapDedicatedSlots.forEach { slotStatus ->
-                DedicatedSlotItemCard(
-                    slotStatus = slotStatus,
-                    isTamil = isTamil,
-                    darkTheme = darkTheme,
-                    isImporting = isImporting,
-                    textColor = textColor,
-                    subColor = subColor,
-                    onUploadClick = { onDedicatedSlotUpload(slotStatus.slot) },
                     onDeleteClick = { onDeleteDedicatedSlot(slotStatus.slot) }
                 )
             }

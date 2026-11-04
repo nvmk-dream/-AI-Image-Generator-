@@ -204,79 +204,115 @@ fun CircularGlowIconButton(
 }
 
 @Composable
-fun FeatureGlowCard(
+fun FeaturePhotoBannerCard(
     title: String,
-    gradientStart: Color,
-    gradientEnd: Color,
+    imageResId: Int,
     testTag: String,
-    onClick: () -> Unit,
+    onClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
-    leadingArtwork: @Composable () -> Unit
+    overlayDecoration: (@Composable BoxScope.() -> Unit)? = null
 ) {
-    val shape = RoundedCornerShape(22.dp)
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
+    val shape = RoundedCornerShape(24.dp)
+    val hasLongWord = title.lines().any { it.length >= 12 }
+    val titleFontSize = if (hasLongWord) 12.5.sp else 15.sp
+    val titleLineHeight = if (hasLongWord) 15.5.sp else 18.sp
+
+    Box(
         modifier = modifier
-            .height(92.dp)
+            .height(112.dp)
             .shadow(
                 elevation = 10.dp,
                 shape = shape,
-                ambientColor = gradientEnd.copy(alpha = 0.55f),
-                spotColor = gradientEnd.copy(alpha = 0.65f)
+                ambientColor = Color(0x55C2185B),
+                spotColor = Color(0x667B1FA2)
             )
             .clip(shape)
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(
-                        gradientStart.copy(alpha = 0.92f),
-                        gradientEnd.copy(alpha = 0.88f)
-                    )
-                )
-            )
+            .background(Color(0xFF1A0D2E))
             .border(
-                width = 1.5.dp,
+                width = 2.dp,
                 brush = Brush.verticalGradient(
-                    listOf(Color.White.copy(alpha = 0.9f), Color.White.copy(alpha = 0.35f))
+                    listOf(
+                        Color.White.copy(alpha = 0.98f),
+                        Color(0xFFFCE4EC).copy(alpha = 0.90f)
+                    )
                 ),
                 shape = shape
             )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier
+                }
+            )
             .testTag(testTag)
     ) {
+        Image(
+            painter = painterResource(id = imageResId),
+            contentDescription = title.replace('\n', ' '),
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        overlayDecoration?.invoke(this)
+
+        // Smooth bottom gradient scrim so white title & chevron pop without dimming the upper portrait
         Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.size(54.dp)
-        ) {
-            leadingArtwork()
-        }
-        Spacer(modifier = Modifier.width(8.dp))
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to Color.Transparent,
+                        0.46f to Color.Transparent,
+                        0.76f to Color(0x880E061F),
+                        1.0f to Color(0xDC080314)
+                    )
+                )
+        )
+
         Text(
             text = title,
             color = Color.White,
             style = MaterialTheme.typography.titleMedium.copy(
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-                lineHeight = 19.sp
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = titleFontSize,
+                lineHeight = titleLineHeight,
+                shadow = androidx.compose.ui.graphics.Shadow(
+                    color = Color(0xDD000000),
+                    offset = androidx.compose.ui.geometry.Offset(0f, 2f),
+                    blurRadius = 6f
+                )
             ),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 11.dp, bottom = 10.dp, end = 38.dp)
         )
-        Spacer(modifier = Modifier.width(4.dp))
+
+        // Glowing circular right-chevron button in bottom-right corner
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(24.dp)
+                .align(Alignment.BottomEnd)
+                .padding(end = 9.dp, bottom = 8.dp)
+                .size(28.dp)
+                .shadow(6.dp, CircleShape, spotColor = Color(0xFF40C4FF))
                 .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.22f))
-                .border(1.dp, Color.White.copy(alpha = 0.85f), CircleShape)
+                .background(Color(0xE00C132E))
+                .border(
+                    width = 1.5.dp,
+                    brush = Brush.linearGradient(
+                        listOf(Color(0xFF40C4FF), Color.White, Color(0xFF7C4DFF))
+                    ),
+                    shape = CircleShape
+                )
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
                 tint = Color.White,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(18.dp)
             )
         }
     }
