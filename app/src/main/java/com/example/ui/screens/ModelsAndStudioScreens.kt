@@ -111,6 +111,9 @@ fun ModelsTabScreen(
     onAttachCompanionWeight: (DiffusionModelSlot) -> Unit = {},
     onOpenSettingsDownloads: () -> Unit = {},
     onDeleteSlot: (DiffusionModelSlot) -> Unit = {},
+    isDownloadingMediaPipe: Boolean = false,
+    mediaPipeDownloadStatus: String? = null,
+    onDownloadMediaPipeTasks: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isTamil = preferences.isTamil
@@ -439,6 +442,125 @@ fun ModelsTabScreen(
                     },
                     onDeleteClick = { onDeleteDedicatedSlot(slotStatus.slot) }
                 )
+            }
+
+            // 3D. Optional Avatar Customization Model (Slot 7: Face-Aging ~300 MB) & MediaPipe Vision
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = if (isTamil) {
+                    "Avatar Customization (விருப்ப Slot 7 & MediaPipe Vision)"
+                } else {
+                    "Avatar Customization (Optional Slot 7 & MediaPipe Vision)"
+                },
+                color = textColor,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
+            )
+
+            metrics.optionalAvatarDedicatedSlots.forEach { slotStatus ->
+                DedicatedSlotItemCard(
+                    slotStatus = slotStatus,
+                    isTamil = isTamil,
+                    darkTheme = darkTheme,
+                    isImporting = isImporting,
+                    textColor = textColor,
+                    subColor = subColor,
+                    onUploadClick = { onDedicatedSlotUpload(slotStatus.slot) },
+                    onDeleteClick = { onDeleteDedicatedSlot(slotStatus.slot) }
+                )
+            }
+
+            FrostedGlassCard(darkTheme = darkTheme) {
+                val mpStatus = metrics.mediaPipeTasksStatus
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = if (mpStatus.allTasksReady) Icons.Filled.CheckCircle else Icons.Filled.CloudDownload,
+                        contentDescription = null,
+                        tint = if (mpStatus.allTasksReady) NeonReadyGreen else SoftAmberStatus,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isTamil) {
+                                "MediaPipe Tasks Vision (${mpStatus.installedCount}/3)"
+                            } else {
+                                "MediaPipe Tasks Vision (${mpStatus.installedCount}/3)"
+                            },
+                            color = textColor,
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold)
+                        )
+                        Text(
+                            text = if (isTamil) {
+                                "Face Landmarker (478-pt) + Pose Landmarker (33-pt) + Multiclass Hair/Clothes Segmenter (~25 MB)"
+                            } else {
+                                "Face Landmarker (478-pt) + Pose Landmarker (33-pt) + Multiclass Hair/Clothes Segmenter (~25 MB)"
+                            },
+                            color = subColor,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+                if (!mediaPipeDownloadStatus.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = mediaPipeDownloadStatus,
+                        color = VibrantPinkPill,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .minimumInteractiveComponentSize()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                if (mpStatus.allTasksReady) listOf(PurpleActionStart, PurpleActionEnd)
+                                else listOf(PinkGlowStart, VibrantPinkPill)
+                            )
+                        )
+                        .border(1.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(14.dp))
+                        .clickable(
+                            enabled = !isDownloadingMediaPipe && !isImporting,
+                            onClick = onDownloadMediaPipeTasks
+                        )
+                        .padding(vertical = 9.dp, horizontal = 12.dp)
+                        .testTag("models_download_mediapipe_button")
+                ) {
+                    if (isDownloadingMediaPipe) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.Download,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = when {
+                            isDownloadingMediaPipe ->
+                                if (isTamil) "MediaPipe பதிவிறக்கம் நடைபெறுகிறது..." else "Downloading MediaPipe Tasks..."
+                            mpStatus.allTasksReady ->
+                                if (isTamil) "MediaPipe 3/3 தயார் ✓ (மீண்டும் சரிபார்)" else "MediaPipe 3/3 Ready ✓ (Re-verify)"
+                            else ->
+                                if (isTamil) "MediaPipe Vision (3/3) பதிவிறக்கு" else "Download MediaPipe Vision Tasks (3/3)"
+                        },
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))

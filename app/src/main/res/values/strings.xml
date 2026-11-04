@@ -24,4 +24,7 @@
     <string name="cd_copy_download_link">Copy ONNX model download link</string>
     <string name="cd_open_download_link">Open ONNX model download link in browser</string>
     <string name="models_attach_companion_weights">Attach External Weights File</string>
+    <string name="avatar_custom_title">Avatar Customization</string>
+    <string name="avatar_custom_subtitle">100% Offline Realistic DSLR Photography Attributes</string>
+    <string name="slot_7_aging_title">Slot 7: Aging Engine (~300 MB • Optional)</string>
 </resources>

@@ -203,6 +203,58 @@ object OnnxModelDownloadCatalog {
                     isDirectFile = false
                 )
             )
+        ),
+        OnnxDownloadGroup(
+            id = "avatar_slot7_and_mediapipe",
+            badgeLabelEn = "AVATAR CUSTOMIZATION • SLOT 7 & MEDIAPIPE",
+            badgeLabelTa = "அவதார் தனிப்பயனாக்கம் • Slot 7 & MediaPipe",
+            titleEn = "Avatar Customization: Slot 7 Aging (~300 MB) & MediaPipe Vision",
+            titleTa = "Avatar Customization: Slot 7 Aging (~300 MB) & MediaPipe Vision",
+            descriptionEn = "Optional Slot 7 Face-Aging ONNX model + official Google MediaPipe Face, Pose, and Multiclass Segmenter task bundles.",
+            descriptionTa = "விருப்ப Slot 7 Face-Aging ONNX மாடல் மற்றும் Google MediaPipe Face, Pose, Multiclass Segmenter ஃபைல்கள்.",
+            isRecommended = false,
+            links = listOf(
+                OnnxDownloadLinkItem(
+                    id = "slot7_aging_onnx_search",
+                    titleEn = "Slot 7: Face-Aging / SAM ONNX Models (Hugging Face)",
+                    titleTa = "Slot 7: Face-Aging ONNX மாடல்கள் பக்கம் (Hugging Face)",
+                    subtitleEn = "Optional ~300 MB Face-Aging ONNX model for Slot 7",
+                    subtitleTa = "Slot 7-ல் ஏற்றக்கூடிய விருப்ப Face-Aging ONNX மாடல்கள்",
+                    sizeBadge = "~300 MB",
+                    url = "https://huggingface.co/models?search=face+aging+onnx",
+                    isDirectFile = false
+                ),
+                OnnxDownloadLinkItem(
+                    id = "mp_face_landmarker_task",
+                    titleEn = "MediaPipe Face Landmarker (face_landmarker.task)",
+                    titleTa = "MediaPipe Face Landmarker (முக அமைப்பு கண்டறிதல்)",
+                    subtitleEn = "478-point 3D facial landmarks bundle",
+                    subtitleTa = "478 புள்ளி முக அடையாள கண்டறிதல் கோப்பு",
+                    sizeBadge = "~3.7 MB",
+                    url = MediaPipeAvatarVisionEngine.FACE_TASK_URL,
+                    isDirectFile = true
+                ),
+                OnnxDownloadLinkItem(
+                    id = "mp_pose_landmarker_task",
+                    titleEn = "MediaPipe Pose Landmarker (pose_landmarker_lite.task)",
+                    titleTa = "MediaPipe Pose Landmarker (உடல் போஸ் கண்டறிதல்)",
+                    subtitleEn = "33-point BlazePose body & torso landmarks bundle",
+                    subtitleTa = "33 புள்ளி உடல் & வயிறு போஸ் கண்டறிதல் கோப்பு",
+                    sizeBadge = "~5.6 MB",
+                    url = MediaPipeAvatarVisionEngine.POSE_TASK_URL,
+                    isDirectFile = true
+                ),
+                OnnxDownloadLinkItem(
+                    id = "mp_multiclass_segmenter",
+                    titleEn = "MediaPipe Multiclass Segmenter (selfie_multiclass_256x256.tflite)",
+                    titleTa = "MediaPipe Multiclass Segmenter (முடி/உடல்/ஆடை பிரிப்பு)",
+                    subtitleEn = "Separates Hair, Face-Skin, Body-Skin, Clothes & Background",
+                    subtitleTa = "முடி, முகம், உடல் மற்றும் ஆடையை தனித்தனியாகப் பிரிக்கும் கோப்பு",
+                    sizeBadge = "~16 MB",
+                    url = MediaPipeAvatarVisionEngine.MULTICLASS_SEG_URL,
+                    isDirectFile = true
+                )
+            )
         )
     )
 }

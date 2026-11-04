@@ -53,6 +53,20 @@ data class ImageToImageResult(
     val durationMs: Long
 )
 
+data class AvatarCustomizationResult(
+    val bitmap: Bitmap,
+    val croppedSourceFile: File,
+    val tab: AvatarCustomTab,
+    val usedSlot7AgingModel: Boolean,
+    val usedMediaPipeVision: Boolean,
+    val positivePrompt: String,
+    val effectiveStrength: Float,
+    val seed: Long,
+    val activeSteps: Int,
+    val resolutionLabel: String,
+    val durationMs: Long
+)
+
 class OnnxDiffusionEngine(
     private val context: Context,
     private val modelManager: OnnxModelManager
@@ -158,6 +172,12 @@ class OnnxDiffusionEngine(
         lines.add(
             "✅ Slot 6 Tokenizer -> ${if (hasCustomTok) "Custom vocab.json & merges.txt" else "Built-in CLIP vocab.json & merges.txt"} (${tokIds.size} tokens)"
         )
+
+        val slot7AgingFile = modelManager.resolveExistingSlotFile(DiffusionModelSlot.FACE_AGING)
+        if (slot7AgingFile != null) {
+            currentCoroutineContext().ensureActive()
+            verifyOnnxTarget("Slot 7 Optional Aging Engine", slot7AgingFile)
+        }
 
         if (verifiedCount == 0 && incompleteCount == 0) {
             error("No .onnx files installed yet. Open Models tab to upload individual slots or select your IG folder.")
@@ -783,6 +803,416 @@ class OnnxDiffusionEngine(
             resolutionLabel = "$width × $height",
             durationMs = totalMs
         )
+        }
+    }
+
+    /**
+     * Full Offline Avatar Customization Pipeline (100% Realistic DSLR Photography ONLY):
+     * 1. MediaPipe Tasks Vision (`FaceLandmarker` + `PoseLandmarker` + `Multiclass ImageSegmenter`)
+     *    extracts exact Face/Hair/Torso/Clothes landmarks & semantic mask on-device.
+     * 2. Optional Slot 7 (`face_aging.onnx`) hardware-accelerated path for Age Progression if uploaded.
+     * 3. Latent-Space Masked Diffusion Inpainting (`VAE Encoder -> CLIP -> Masked UNet -> VAE Decoder`)
+     *    followed by Identity-Locked Feathered Photo Compositing so unmasked face/hands/background
+     *    remain 100% razor-sharp original DSLR pixels.
+     */
+    suspend fun generateAvatarCustomization(
+        sourceImageUri: Uri,
+        params: AvatarCustomizationParams,
+        userBrushStrokes: List<MaskBrushStroke>,
+        visionEngine: MediaPipeAvatarVisionEngine,
+        safetyTailPrompt: String,
+        resolutionLabel: String,
+        inferenceMode: String,
+        samplerType: SamplerType,
+        steps: Int,
+        guidanceScale: Float,
+        activeEngine: ActiveDiffusionEngine = ActiveDiffusionEngine.FAST_LCM,
+        onProgress: (GenerationProgress) -> Unit
+    ): Result<AvatarCustomizationResult> = runCatching {
+        currentCoroutineContext().ensureActive()
+        generationMutex.withLock {
+            currentCoroutineContext().ensureActive()
+            cancelRequested.set(false)
+            val startMs = System.currentTimeMillis()
+
+            val (builtPrompt, computedStrength) = AvatarCustomizationCatalog.buildRealisticPromptAndStrength(params)
+            val finalPositiveInput = if (safetyTailPrompt.isNotBlank()) {
+                "$builtPrompt, $safetyTailPrompt"
+            } else {
+                builtPrompt
+            }
+
+            val safetyCheck = MandatorySafetyGuard.validateRequest(
+                userPrompt = builtPrompt,
+                hasRealPersonReferencePhoto = true
+            )
+            if (!safetyCheck.allowed) {
+                error(safetyCheck.messageEn ?: "Please adjust your customization note and try again.")
+            }
+
+            val (width, height) = parseResolution(resolutionLabel)
+            val env = OrtEnvironment.getEnvironment()
+            val seed = params.seed
+
+            onProgress(
+                GenerationProgress(
+                    stageTitle = "Analyzing Face, Pose & Mask (MediaPipe Vision)...",
+                    currentStep = 0,
+                    totalSteps = steps.coerceAtLeast(4),
+                    percent = 6,
+                    elapsedMs = System.currentTimeMillis() - startMs
+                )
+            )
+            checkNotCancelled()
+
+            val originalCropped = ImageBitmapPreprocessor.loadAndCenterCropFromUri(
+                context = context,
+                uri = sourceImageUri,
+                targetWidth = width,
+                targetHeight = height
+            )
+            val croppedSourceFile = ImageBitmapPreprocessor.saveReferencePreview(context, originalCropped)
+
+            val analysis = visionEngine.analyzePhoto(originalCropped)
+            val usedMediaPipe = analysis.usedMediaPipeFace || analysis.usedMediaPipePose || analysis.usedMediaPipeSegmenter
+            val featheredMask = visionEngine.buildFeatheredMask(
+                analysis = analysis,
+                params = params,
+                userStrokes = userBrushStrokes,
+                outWidth = width,
+                outHeight = height
+            )
+
+            // Check Optional Slot 7 Dedicated Face-Aging ONNX Model first when in AGE tab
+            if (params.activeTab == AvatarCustomTab.AGE) {
+                val slot7File = modelManager.resolveExistingSlotFile(DiffusionModelSlot.FACE_AGING)
+                if (slot7File != null && OnnxModelManager.findMissingCompanionFiles(slot7File).isEmpty()) {
+                    onProgress(
+                        GenerationProgress(
+                            stageTitle = "Running Slot 7 Face-Aging ONNX Engine (Age ${params.targetAge})...",
+                            currentStep = 1,
+                            totalSteps = 2,
+                            percent = 45,
+                            elapsedMs = System.currentTimeMillis() - startMs
+                        )
+                    )
+                    val slot7AgedBitmap = runCatching {
+                        createSafeSession(env, slot7File, inferenceMode).use { agingSession ->
+                            AvatarPhotoCompositor.tryRunOptionalSlot7AgingModel(
+                                env = env,
+                                session = agingSession,
+                                sourceBitmap = originalCropped,
+                                targetAge = params.targetAge
+                            )
+                        }
+                    }.getOrNull()
+
+                    if (slot7AgedBitmap != null) {
+                        val composited = AvatarPhotoCompositor.compositeIdentityLockedPhoto(
+                            original = originalCropped,
+                            generated = slot7AgedBitmap,
+                            featheredMask = featheredMask
+                        )
+                        slot7AgedBitmap.recycle()
+                        originalCropped.recycle()
+                        System.gc()
+                        val totalMs = System.currentTimeMillis() - startMs
+                        onProgress(
+                            GenerationProgress(
+                                stageTitle = "Completed (Slot 7 Aging Engine)!",
+                                currentStep = 2,
+                                totalSteps = 2,
+                                percent = 100,
+                                elapsedMs = totalMs
+                            )
+                        )
+                        return@withLock AvatarCustomizationResult(
+                            bitmap = composited,
+                            croppedSourceFile = croppedSourceFile,
+                            tab = params.activeTab,
+                            usedSlot7AgingModel = true,
+                            usedMediaPipeVision = usedMediaPipe,
+                            positivePrompt = builtPrompt,
+                            effectiveStrength = computedStrength,
+                            seed = seed,
+                            activeSteps = 1,
+                            resolutionLabel = "$width × $height",
+                            durationMs = totalMs
+                        )
+                    }
+                }
+            }
+
+            // Core 1A–6 Latent-Space Masked Diffusion Inpainting Pipeline
+            val vaeEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_ENCODER, "Slot 5 (VAE Encoder)")
+            val textEncoderFile = requireCompleteSlotFile(DiffusionModelSlot.TEXT_ENCODER, "Slot 3 (Text Encoder CLIP)")
+            val unetFile = requireCompleteActiveEngineFile(activeEngine)
+            val vaeDecoderFile = requireCompleteSlotFile(DiffusionModelSlot.VAE_DECODER, "Slot 4 (VAE Decoder)")
+
+            val latentW = width / 8
+            val latentH = height / 8
+            val latentSize = 4 * latentH * latentW
+            val latentMask = AvatarPhotoCompositor.downsampleMaskToLatentGrid(
+                pixelMask = featheredMask,
+                imgW = width,
+                imgH = height,
+                latentW = latentW,
+                latentH = latentH
+            )
+
+            onProgress(
+                GenerationProgress(
+                    stageTitle = "Encoding Original Photo (VAE Encoder)...",
+                    currentStep = 0,
+                    totalSteps = steps.coerceAtLeast(4),
+                    percent = 14,
+                    elapsedMs = System.currentTimeMillis() - startMs
+                )
+            )
+            checkNotCancelled()
+
+            val cleanImageLatents = createSafeSession(env, vaeEncoderFile, inferenceMode).use { vaeEncSession ->
+                runVaeEncoder(
+                    env = env,
+                    vaeEncSession = vaeEncSession,
+                    bitmap = originalCropped,
+                    latentSize = latentSize,
+                    seed = seed
+                )
+            }
+            System.gc()
+
+            onProgress(
+                GenerationProgress(
+                    stageTitle = "Encoding Realistic DSLR Attributes (CLIP)...",
+                    currentStep = 0,
+                    totalSteps = steps.coerceAtLeast(4),
+                    percent = 22,
+                    elapsedMs = System.currentTimeMillis() - startMs
+                )
+            )
+            checkNotCancelled()
+
+            val normalizedClipPrompt = OfflineTamilPromptTranslator.normalizeForClip(finalPositiveInput)
+            val posTokenIds = tokenizer.encode(normalizedClipPrompt)
+            val negTokenIds = tokenizer.encode(AvatarCustomizationCatalog.STRICT_ANTI_NON_PHOTO_NEGATIVE_PROMPT)
+
+            val (posEmbeddings, negEmbeddings, hiddenDim) = createSafeSession(env, textEncoderFile, inferenceMode).use { teSession ->
+                val posOut = runTextEncoder(env, teSession, posTokenIds)
+                checkNotCancelled()
+                val negOut = runTextEncoder(env, teSession, negTokenIds).first
+                Triple(posOut.first, negOut, posOut.second)
+            }
+            System.gc()
+
+            var activeSteps = steps.coerceAtLeast(1)
+            val denoisedLatents = createSafeSession(
+                env = env,
+                modelFile = unetFile,
+                inferenceMode = inferenceMode,
+                onRepairStatus = { repairMsg ->
+                    onProgress(
+                        GenerationProgress(
+                            stageTitle = repairMsg,
+                            currentStep = 0,
+                            totalSteps = activeSteps,
+                            percent = 28,
+                            elapsedMs = System.currentTimeMillis() - startMs
+                        )
+                    )
+                }
+            ).use { unetSession ->
+                val isLcmModel = detectLikelyLcmModel(unetFile = unetFile, unetSession = unetSession)
+                val effectiveSampler = if (samplerType == SamplerType.LCM_FAST && !isLcmModel) {
+                    SamplerType.EULER_STANDARD
+                } else {
+                    samplerType
+                }
+                val effectiveSteps = if (effectiveSampler == SamplerType.EULER_STANDARD && samplerType == SamplerType.LCM_FAST) {
+                    steps.coerceAtLeast(14)
+                } else {
+                    steps
+                }
+                val effectiveGuidance = if (effectiveSampler == SamplerType.EULER_STANDARD &&
+                    samplerType == SamplerType.LCM_FAST &&
+                    guidanceScale < 4.0f
+                ) {
+                    7.0f
+                } else {
+                    guidanceScale
+                }
+                val startStepIndex = DiffusionSchedulers.computeImg2ImgStartStep(effectiveSteps, computedStrength)
+                activeSteps = (effectiveSteps - startStepIndex).coerceAtLeast(1)
+
+                if (effectiveSampler == SamplerType.LCM_FAST) {
+                    val scheduler = DiffusionSchedulers.LcmSession(effectiveSteps)
+                    var latents = scheduler.addNoise(cleanImageLatents, startStepIndex, seed)
+                    var executed = 0
+
+                    for (stepIdx in startStepIndex until effectiveSteps) {
+                        checkNotCancelled()
+                        executed++
+                        val t = scheduler.timesteps[stepIdx]
+                        val pct = 30 + ((executed.toFloat() / activeSteps.toFloat()) * 56f).toInt()
+                        onProgress(
+                            GenerationProgress(
+                                stageTitle = "Inpainting ${params.activeTab.shortTitleEn} (LCM $executed/$activeSteps)...",
+                                currentStep = executed,
+                                totalSteps = activeSteps,
+                                percent = pct,
+                                elapsedMs = System.currentTimeMillis() - startMs
+                            )
+                        )
+
+                        val noisePred = runUnetSingleBatch(
+                            env = env,
+                            unetSession = unetSession,
+                            latents = latents,
+                            latentH = latentH,
+                            latentW = latentW,
+                            timestep = t,
+                            encoderHiddenStates = posEmbeddings,
+                            hiddenDim = hiddenDim,
+                            guidanceScale = effectiveGuidance,
+                            imageWidth = width,
+                            imageHeight = height
+                        )
+                        val editedNext = scheduler.step(noisePred, stepIdx, latents, seed)
+                        val refAtNext = if (stepIdx + 1 < effectiveSteps) {
+                            scheduler.addNoise(cleanImageLatents, stepIdx + 1, seed + stepIdx + 1L)
+                        } else {
+                            cleanImageLatents
+                        }
+                        latents = AvatarPhotoCompositor.blendLatentStep(editedNext, refAtNext, latentMask)
+                    }
+                    latents
+                } else {
+                    val scheduler = DiffusionSchedulers.EulerSession(effectiveSteps)
+                    var latents = scheduler.addNoise(cleanImageLatents, startStepIndex, seed)
+                    var executed = 0
+                    val twoPassCfg = effectiveGuidance > 1.15f && !unetRequiresStaticBatchTwo(unetSession)
+
+                    for (stepIdx in startStepIndex until effectiveSteps) {
+                        checkNotCancelled()
+                        executed++
+                        val t = scheduler.timesteps[stepIdx]
+                        val pct = 30 + (((executed - 0.7f) / activeSteps.toFloat()) * 56f).toInt()
+                        onProgress(
+                            GenerationProgress(
+                                stageTitle = if (twoPassCfg) {
+                                    "Inpainting ${params.activeTab.shortTitleEn} (Step $executed/$activeSteps • 1/2)..."
+                                } else {
+                                    "Inpainting ${params.activeTab.shortTitleEn} (Step $executed/$activeSteps)..."
+                                },
+                                currentStep = executed,
+                                totalSteps = activeSteps,
+                                percent = pct,
+                                elapsedMs = System.currentTimeMillis() - startMs
+                            )
+                        )
+
+                        val scaledLatents = scheduler.scaleModelInput(latents, stepIdx)
+                        val finalNoise = runEulerNoisePrediction(
+                            env = env,
+                            unetSession = unetSession,
+                            scaledLatents = scaledLatents,
+                            latentH = latentH,
+                            latentW = latentW,
+                            timestep = t,
+                            posEmbeddings = posEmbeddings,
+                            negEmbeddings = negEmbeddings,
+                            hiddenDim = hiddenDim,
+                            effectiveGuidance = effectiveGuidance,
+                            imageWidth = width,
+                            imageHeight = height,
+                            onSecondPassStart = {
+                                val pass2Pct = 30 + (((executed - 0.3f) / activeSteps.toFloat()) * 56f).toInt()
+                                onProgress(
+                                    GenerationProgress(
+                                        stageTitle = "Inpainting ${params.activeTab.shortTitleEn} (Step $executed/$activeSteps • 2/2)...",
+                                        currentStep = executed,
+                                        totalSteps = activeSteps,
+                                        percent = pass2Pct,
+                                        elapsedMs = System.currentTimeMillis() - startMs
+                                    )
+                                )
+                            }
+                        )
+                        val editedNext = scheduler.step(finalNoise, stepIdx, latents)
+                        val refAtNext = if (stepIdx + 1 < effectiveSteps) {
+                            scheduler.addNoise(cleanImageLatents, stepIdx + 1, seed + stepIdx + 1L)
+                        } else {
+                            cleanImageLatents
+                        }
+                        latents = AvatarPhotoCompositor.blendLatentStep(editedNext, refAtNext, latentMask)
+                    }
+                    latents
+                }
+            }
+            System.gc()
+
+            onProgress(
+                GenerationProgress(
+                    stageTitle = "Decoding & Locking Original Identity (VAE Decoder)...",
+                    currentStep = activeSteps,
+                    totalSteps = activeSteps,
+                    percent = 92,
+                    elapsedMs = System.currentTimeMillis() - startMs
+                )
+            )
+            checkNotCancelled()
+
+            val scaledForVae = FloatArray(denoisedLatents.size) { i ->
+                denoisedLatents[i] / 0.18215f
+            }
+
+            val rawGenerated = createSafeSession(env, vaeDecoderFile, inferenceMode).use { vaeSession ->
+                runVaeDecoderToBitmap(
+                    env = env,
+                    vaeSession = vaeSession,
+                    scaledLatents = scaledForVae,
+                    latentH = latentH,
+                    latentW = latentW,
+                    outWidth = width,
+                    outHeight = height
+                )
+            }
+            val finalComposited = try {
+                AvatarPhotoCompositor.compositeIdentityLockedPhoto(
+                    original = originalCropped,
+                    generated = rawGenerated,
+                    featheredMask = featheredMask
+                )
+            } finally {
+                rawGenerated.recycle()
+                originalCropped.recycle()
+            }
+            System.gc()
+
+            val totalMs = System.currentTimeMillis() - startMs
+            onProgress(
+                GenerationProgress(
+                    stageTitle = "Completed!",
+                    currentStep = activeSteps,
+                    totalSteps = activeSteps,
+                    percent = 100,
+                    elapsedMs = totalMs
+                )
+            )
+
+            AvatarCustomizationResult(
+                bitmap = finalComposited,
+                croppedSourceFile = croppedSourceFile,
+                tab = params.activeTab,
+                usedSlot7AgingModel = false,
+                usedMediaPipeVision = usedMediaPipe,
+                positivePrompt = builtPrompt,
+                effectiveStrength = computedStrength,
+                seed = seed,
+                activeSteps = activeSteps,
+                resolutionLabel = "$width × $height",
+                durationMs = totalMs
+            )
         }
     }
 

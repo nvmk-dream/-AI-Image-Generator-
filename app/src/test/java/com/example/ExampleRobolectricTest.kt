@@ -114,7 +114,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `home screen displays 6 realistic cards without face swap and avatar customization is blank`() {
+    fun `home screen displays 6 realistic cards without face swap and opens avatar customization`() {
         var navigatedScreen: com.example.ui.ActiveScreen? = null
         composeTestRule.setContent {
             MyApplicationTheme(darkTheme = false) {
@@ -147,12 +147,12 @@ class ExampleRobolectricTest {
                 .assertIsDisplayed()
         }
 
-        // Tapping Avatar Customization must perform NO navigation (blank card)
+        // Tapping Avatar Customization opens ActiveScreen.AVATAR_CUSTOMIZATION
         composeTestRule.onNodeWithTag("card_avatar_customization")
             .performScrollTo()
             .performClick()
         composeTestRule.waitForIdle()
-        assertEquals(null, navigatedScreen)
+        assertEquals(com.example.ui.ActiveScreen.AVATAR_CUSTOMIZATION, navigatedScreen)
 
         // Tapping Text to Image navigates normally
         composeTestRule.onNodeWithTag("card_text_to_image")
@@ -160,5 +160,106 @@ class ExampleRobolectricTest {
             .performClick()
         composeTestRule.waitForIdle()
         assertEquals(com.example.ui.ActiveScreen.TEXT_TO_IMAGE, navigatedScreen)
+    }
+
+    @Test
+    fun `avatar customization screen renders 4 tabs realistic presets sliders and slot 7 in models tab`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val manager = OnnxModelManager(context)
+        val realMetrics = manager.inspectCurrentMetrics()
+
+        composeTestRule.setContent {
+            var currentParams = androidx.compose.runtime.remember {
+                androidx.compose.runtime.mutableStateOf(com.example.ai.AvatarCustomizationParams())
+            }
+            MyApplicationTheme(darkTheme = false) {
+                com.example.ui.screens.AvatarCustomizationScreen(
+                    preferences = AppPreferencesState(),
+                    metrics = realMetrics,
+                    sourcePhotoUri = null,
+                    hasLatestAppCreation = false,
+                    params = currentParams.value,
+                    userBrushStrokes = emptyList(),
+                    visionAnalysis = null,
+                    maskOverlayBitmap = null,
+                    latestAvatarCreation = null,
+                    latestAvatarSourcePath = null,
+                    isGenerating = false,
+                    progress = null,
+                    errorMessage = null,
+                    isDownloadingMediaPipe = false,
+                    mediaPipeDownloadStatus = null,
+                    onSelectEngine = {},
+                    onPickSourcePhoto = {},
+                    onUseLatestAppCreation = {},
+                    onParamsChange = { currentParams.value = it },
+                    onAddBrushStroke = {},
+                    onUndoBrushStroke = {},
+                    onResetBrushStrokes = {},
+                    onDownloadMediaPipeTasks = {},
+                    onGenerateAvatar = {},
+                    onCancelGeneration = {},
+                    onUseResultAsNextSource = {},
+                    onToggleFavorite = {},
+                    onExportToGallery = {},
+                    onOpenModelsTab = {},
+                    onOpenContentSafetySettings = {},
+                    onBack = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        // Default Tab 1: Age Progression presets + sliders + shared sliders
+        composeTestRule.onNodeWithTag("avatar_preset_age_senior_72").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("avatar_slider_target_age").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("avatar_slider_transform_strength").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("avatar_slider_identity_lock").performScrollTo().assertIsDisplayed()
+
+        // Switch to Tab 2: Body / Abs
+        composeTestRule.onNodeWithTag("avatar_tab_body_abs").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("avatar_preset_body_six_pack_abs").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("avatar_slider_abs_definition").performScrollTo().assertIsDisplayed()
+
+        // Switch to Tab 3: Hairstyle
+        composeTestRule.onNodeWithTag("avatar_tab_hairstyle").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("avatar_preset_hair_layered_waves").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("avatar_slider_hair_volume").performScrollTo().assertIsDisplayed()
+
+        // Switch to Tab 4: Outfit / Clothes
+        composeTestRule.onNodeWithTag("avatar_tab_outfit").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("avatar_preset_outfit_silk_saree").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("avatar_slider_cloth_draping").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `models tab screen displays optional slot 7 aging engine and mediapipe vision card`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val realMetrics = OnnxModelManager(context).inspectCurrentMetrics()
+
+        composeTestRule.setContent {
+            MyApplicationTheme(darkTheme = false) {
+                com.example.ui.screens.ModelsTabScreen(
+                    preferences = AppPreferencesState(),
+                    metrics = realMetrics,
+                    isImporting = false,
+                    importProgressText = null,
+                    verificationReport = null,
+                    onOneTouchFolderUpload = {},
+                    onVerifyPipeline = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("upload_slot_7_face_aging")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeTestRule.onNodeWithTag("models_download_mediapipe_button")
+            .performScrollTo()
+            .assertIsDisplayed()
     }
 }

@@ -1,14 +1,22 @@
 package com.example.ui
 
 import android.app.Application
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.AutoDownloadProgressState
+import com.example.ai.AvatarCustomizationCatalog
+import com.example.ai.AvatarCustomizationParams
+import com.example.ai.AvatarPhotoCompositor
+import com.example.ai.AvatarVisionAnalysis
 import com.example.ai.DedicatedModelSlot
 import com.example.ai.DiffusionModelSlot
 import com.example.ai.GenerationProgress
+import com.example.ai.ImageBitmapPreprocessor
 import com.example.ai.ImageEditorAdjustments
+import com.example.ai.MaskBrushStroke
+import com.example.ai.MediaPipeAvatarVisionEngine
 import com.example.ai.OfflineImageEditorEngine
 import com.example.ai.OnnxAutoModelDownloader
 import com.example.ai.OnnxDiffusionEngine
@@ -53,6 +61,7 @@ enum class ActiveScreen {
     TEXT_TO_IMAGE,
     IMAGE_TO_IMAGE,
     CHARACTER_STUDIO,
+    AVATAR_CUSTOMIZATION,
     IMAGE_EDITOR,
     MY_GALLERY
 }
@@ -79,6 +88,15 @@ data class ImageGeneratorUiState(
     val latestImg2ImgCreation: GeneratedCreation? = null,
     val latestImg2ImgSourcePath: String? = null,
     val latestCharacterCreation: GeneratedCreation? = null,
+    val avatarSourcePhotoUri: Uri? = null,
+    val avatarParams: AvatarCustomizationParams = AvatarCustomizationParams(),
+    val avatarBrushStrokes: List<MaskBrushStroke> = emptyList(),
+    val avatarVisionAnalysis: AvatarVisionAnalysis? = null,
+    val avatarMaskOverlayBitmap: Bitmap? = null,
+    val latestAvatarCreation: GeneratedCreation? = null,
+    val latestAvatarSourcePath: String? = null,
+    val isDownloadingMediaPipe: Boolean = false,
+    val mediaPipeDownloadStatus: String? = null,
     val editorImageUri: Uri? = null,
     val useLatestCreationInEditor: Boolean = false,
     val latestEditedCreation: GeneratedCreation? = null,
@@ -111,6 +129,15 @@ private data class TransientUiState(
     val latestImg2ImgCreation: GeneratedCreation? = null,
     val latestImg2ImgSourcePath: String? = null,
     val latestCharacterCreation: GeneratedCreation? = null,
+    val avatarSourcePhotoUri: Uri? = null,
+    val avatarParams: AvatarCustomizationParams = AvatarCustomizationParams(),
+    val avatarBrushStrokes: List<MaskBrushStroke> = emptyList(),
+    val avatarVisionAnalysis: AvatarVisionAnalysis? = null,
+    val avatarMaskOverlayBitmap: Bitmap? = null,
+    val latestAvatarCreation: GeneratedCreation? = null,
+    val latestAvatarSourcePath: String? = null,
+    val isDownloadingMediaPipe: Boolean = false,
+    val mediaPipeDownloadStatus: String? = null,
     val editorImageUri: Uri? = null,
     val useLatestCreationInEditor: Boolean = false,
     val latestEditedCreation: GeneratedCreation? = null,
@@ -132,9 +159,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val creationsRepo = CreationsRepository(application)
     private val characterRepo = CharacterStudioRepository(application)
     private val diffusionEngine = OnnxDiffusionEngine(application, modelManager)
+    private val avatarVisionEngine = MediaPipeAvatarVisionEngine(application, modelManager)
 
     private var activeGenerationJob: Job? = null
     private var activeAutoDownloadJob: Job? = null
+    private var activeMaskPreviewJob: Job? = null
+    private var activeMediaPipeDownloadJob: Job? = null
 
     private val initialChars = characterRepo.loadCharacters()
 
@@ -182,6 +212,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             latestImg2ImgCreation = transient.latestImg2ImgCreation,
             latestImg2ImgSourcePath = transient.latestImg2ImgSourcePath,
             latestCharacterCreation = transient.latestCharacterCreation,
+            avatarSourcePhotoUri = transient.avatarSourcePhotoUri,
+            avatarParams = transient.avatarParams,
+            avatarBrushStrokes = transient.avatarBrushStrokes,
+            avatarVisionAnalysis = transient.avatarVisionAnalysis,
+            avatarMaskOverlayBitmap = transient.avatarMaskOverlayBitmap,
+            latestAvatarCreation = transient.latestAvatarCreation,
+            latestAvatarSourcePath = transient.latestAvatarSourcePath,
+            isDownloadingMediaPipe = transient.isDownloadingMediaPipe,
+            mediaPipeDownloadStatus = transient.mediaPipeDownloadStatus,
             editorImageUri = transient.editorImageUri,
             useLatestCreationInEditor = transient.useLatestCreationInEditor,
             latestEditedCreation = transient.latestEditedCreation,
@@ -808,7 +847,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     creations = updated,
                     latestGeneratedCreation = state.latestGeneratedCreation?.let { l -> updated.firstOrNull { it.id == l.id } ?: l },
                     latestImg2ImgCreation = state.latestImg2ImgCreation?.let { l -> updated.firstOrNull { it.id == l.id } ?: l },
-                    latestCharacterCreation = state.latestCharacterCreation?.let { l -> updated.firstOrNull { it.id == l.id } ?: l }
+                    latestCharacterCreation = state.latestCharacterCreation?.let { l -> updated.firstOrNull { it.id == l.id } ?: l },
+                    latestAvatarCreation = state.latestAvatarCreation?.let { l -> updated.firstOrNull { it.id == l.id } ?: l }
                 )
             }
         }
@@ -823,6 +863,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     latestGeneratedCreation = if (state.latestGeneratedCreation?.id == id) updated.firstOrNull() else state.latestGeneratedCreation,
                     latestImg2ImgCreation = if (state.latestImg2ImgCreation?.id == id) null else state.latestImg2ImgCreation,
                     latestCharacterCreation = if (state.latestCharacterCreation?.id == id) null else state.latestCharacterCreation,
+                    latestAvatarCreation = if (state.latestAvatarCreation?.id == id) null else state.latestAvatarCreation,
                     latestEditedCreation = if (state.latestEditedCreation?.id == id) null else state.latestEditedCreation,
                     statusToastMessage = "Deleted image."
                 )
@@ -1304,6 +1345,295 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
+            )
+        }
+    }
+
+    // ==================== AVATAR CUSTOMIZATION (REALISTIC DSLR ONLY) ====================
+
+    fun setAvatarSourcePhoto(uri: Uri?) {
+        transientState.update {
+            it.copy(
+                avatarSourcePhotoUri = uri,
+                avatarBrushStrokes = emptyList(),
+                avatarVisionAnalysis = null,
+                avatarMaskOverlayBitmap = null,
+                latestAvatarCreation = null,
+                generationErrorMessage = null
+            )
+        }
+        if (uri != null) {
+            analyzeAndRefreshAvatarMask(uri)
+        }
+    }
+
+    fun useLatestCreationForAvatar() {
+        val latestPath = uiState.value.latestGeneratedCreation?.filePath ?: return
+        val file = File(latestPath)
+        if (file.exists()) {
+            setAvatarSourcePhoto(Uri.fromFile(file))
+        }
+    }
+
+    fun useAvatarResultAsNextSource() {
+        val outPath = transientState.value.latestAvatarCreation?.filePath ?: return
+        val file = File(outPath)
+        if (file.exists()) {
+            setAvatarSourcePhoto(Uri.fromFile(file))
+        }
+    }
+
+    fun updateAvatarParams(newParams: AvatarCustomizationParams) {
+        val tabChanged = transientState.value.avatarParams.activeTab != newParams.activeTab
+        transientState.update {
+            it.copy(
+                avatarParams = newParams,
+                avatarBrushStrokes = if (tabChanged) emptyList() else it.avatarBrushStrokes,
+                generationErrorMessage = null
+            )
+        }
+        recomputeMaskOverlayOnly()
+    }
+
+    fun addAvatarBrushStroke(stroke: MaskBrushStroke) {
+        transientState.update {
+            it.copy(avatarBrushStrokes = it.avatarBrushStrokes + stroke)
+        }
+        recomputeMaskOverlayOnly()
+    }
+
+    fun undoAvatarBrushStroke() {
+        transientState.update {
+            if (it.avatarBrushStrokes.isEmpty()) it
+            else it.copy(avatarBrushStrokes = it.avatarBrushStrokes.dropLast(1))
+        }
+        recomputeMaskOverlayOnly()
+    }
+
+    fun resetAvatarBrushStrokes() {
+        transientState.update { it.copy(avatarBrushStrokes = emptyList()) }
+        recomputeMaskOverlayOnly()
+    }
+
+    private fun analyzeAndRefreshAvatarMask(uri: Uri) {
+        activeMaskPreviewJob?.cancel()
+        activeMaskPreviewJob = viewModelScope.launch {
+            val analysisResult = withContext(Dispatchers.Default) {
+                runCatching {
+                    val bmp = ImageBitmapPreprocessor.loadAndCenterCropFromUri(
+                        context = getApplication(),
+                        uri = uri,
+                        targetWidth = 384,
+                        targetHeight = 384
+                    )
+                    val analysis = avatarVisionEngine.analyzePhoto(bmp)
+                    bmp.recycle()
+                    val snap = transientState.value
+                    val previewMask = avatarVisionEngine.buildFeatheredMask(
+                        analysis = analysis,
+                        params = snap.avatarParams,
+                        userStrokes = snap.avatarBrushStrokes,
+                        outWidth = 256,
+                        outHeight = 256
+                    )
+                    val overlayBmp = AvatarPhotoCompositor.buildMaskOverlayBitmap(
+                        width = 256,
+                        height = 256,
+                        featheredMask = previewMask,
+                        tab = snap.avatarParams.activeTab
+                    )
+                    analysis to overlayBmp
+                }.getOrNull()
+            }
+            if (analysisResult != null) {
+                transientState.update {
+                    it.copy(
+                        avatarVisionAnalysis = analysisResult.first,
+                        avatarMaskOverlayBitmap = analysisResult.second
+                    )
+                }
+            }
+        }
+    }
+
+    private fun recomputeMaskOverlayOnly() {
+        val analysis = transientState.value.avatarVisionAnalysis ?: return
+        activeMaskPreviewJob?.cancel()
+        activeMaskPreviewJob = viewModelScope.launch {
+            val snap = transientState.value
+            val overlayBmp = withContext(Dispatchers.Default) {
+                val previewMask = avatarVisionEngine.buildFeatheredMask(
+                    analysis = analysis,
+                    params = snap.avatarParams,
+                    userStrokes = snap.avatarBrushStrokes,
+                    outWidth = 256,
+                    outHeight = 256
+                )
+                AvatarPhotoCompositor.buildMaskOverlayBitmap(
+                    width = 256,
+                    height = 256,
+                    featheredMask = previewMask,
+                    tab = snap.avatarParams.activeTab
+                )
+            }
+            transientState.update { it.copy(avatarMaskOverlayBitmap = overlayBmp) }
+        }
+    }
+
+    fun downloadMediaPipeVisionTasks() {
+        if (transientState.value.isDownloadingMediaPipe) return
+        activeMediaPipeDownloadJob = viewModelScope.launch {
+            transientState.update {
+                it.copy(
+                    isDownloadingMediaPipe = true,
+                    mediaPipeDownloadStatus = "Starting MediaPipe Tasks Vision download..."
+                )
+            }
+            val result = avatarVisionEngine.downloadVisionTasksIfNeeded { msg, _ ->
+                transientState.update { s -> s.copy(mediaPipeDownloadStatus = msg) }
+            }
+            val refreshedMetrics = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
+            val isTamil = uiState.value.preferences.isTamil
+            result.fold(
+                onSuccess = {
+                    val okMsg = if (isTamil) {
+                        "✅ MediaPipe Tasks Vision (3/3) வெற்றிகரமாக பதிவிறக்கப்பட்டது!"
+                    } else {
+                        "✅ MediaPipe Tasks Vision (3/3) downloaded & active!"
+                    }
+                    transientState.update {
+                        it.copy(
+                            metrics = refreshedMetrics,
+                            isDownloadingMediaPipe = false,
+                            mediaPipeDownloadStatus = okMsg,
+                            statusToastMessage = okMsg
+                        )
+                    }
+                    transientState.value.avatarSourcePhotoUri?.let { analyzeAndRefreshAvatarMask(it) }
+                },
+                onFailure = { err ->
+                    val errMsg = err.message ?: "Network error"
+                    transientState.update {
+                        it.copy(
+                            metrics = refreshedMetrics,
+                            isDownloadingMediaPipe = false,
+                            mediaPipeDownloadStatus = "MediaPipe download error: $errMsg (Offline FaceDetector active)"
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun generateOfflineAvatarCustomization() {
+        if (transientState.value.isGenerating) return
+        val snapshot = uiState.value
+        val isTamil = snapshot.preferences.isTamil
+        val sourceUri = snapshot.avatarSourcePhotoUri
+        if (sourceUri == null) {
+            transientState.update {
+                it.copy(
+                    generationErrorMessage = if (isTamil) {
+                        "முதலில் உங்கள் கேலரியில் இருந்து ஒரு இயற்கையான புகைப்படத்தைத் (Realistic Photo) தேர்வு செய்யவும்."
+                    } else {
+                        "Please select a Natural Realistic Photograph from your phone gallery first."
+                    }
+                )
+            }
+            return
+        }
+
+        val currentParams = snapshot.avatarParams
+        val effectiveSeed = if (currentParams.lockSeed) {
+            currentParams.seed
+        } else {
+            kotlin.random.Random.nextLong(100_000L, 999_999_999L)
+        }
+        val effectiveParams = currentParams.copy(seed = effectiveSeed)
+        val activeEngine = snapshot.preferences.activeEngine
+        val sampler = if (activeEngine == ActiveDiffusionEngine.FAST_LCM) {
+            SamplerType.LCM_FAST
+        } else {
+            SamplerType.EULER_STANDARD
+        }
+        val steps = if (activeEngine == ActiveDiffusionEngine.FAST_LCM) 8 else 18
+        val guidance = if (activeEngine == ActiveDiffusionEngine.FAST_LCM) 1.5f else 7.0f
+        val safetyTail = if (snapshot.preferences.contentFilterEnabled) {
+            snapshot.preferences.savedContentSafetyPrompt
+        } else {
+            ""
+        }
+
+        activeGenerationJob = viewModelScope.launch {
+            transientState.update {
+                it.copy(
+                    avatarParams = effectiveParams,
+                    isGenerating = true,
+                    generationErrorMessage = null,
+                    generationProgress = GenerationProgress(
+                        stageTitle = "Preparing Offline Realistic Avatar Engine...",
+                        currentStep = 0,
+                        totalSteps = steps,
+                        percent = 3,
+                        elapsedMs = 0L
+                    )
+                )
+            }
+
+            val result = withContext(Dispatchers.Default) {
+                diffusionEngine.generateAvatarCustomization(
+                    sourceImageUri = sourceUri,
+                    params = effectiveParams,
+                    userBrushStrokes = snapshot.avatarBrushStrokes,
+                    visionEngine = avatarVisionEngine,
+                    safetyTailPrompt = safetyTail,
+                    resolutionLabel = snapshot.preferences.resolution,
+                    inferenceMode = snapshot.preferences.inferenceMode,
+                    samplerType = sampler,
+                    steps = steps,
+                    guidanceScale = guidance,
+                    activeEngine = activeEngine,
+                    onProgress = { prog -> transientState.update { s -> s.copy(generationProgress = prog) } }
+                )
+            }
+
+            result.fold(
+                onSuccess = { out ->
+                    val presetTitle = AvatarCustomizationCatalog.findPreset(effectiveParams.selectedPresetId)?.titleEn
+                        ?: effectiveParams.activeTab.shortTitleEn
+                    val summaryLabel = "Avatar • ${effectiveParams.activeTab.shortTitleEn} ($presetTitle)"
+                    val savedCreation = withContext(Dispatchers.IO) {
+                        creationsRepo.saveCreation(
+                            bitmap = out.bitmap,
+                            userPrompt = summaryLabel,
+                            finalGenerationInput = out.positivePrompt,
+                            resolution = out.resolutionLabel,
+                            steps = out.activeSteps,
+                            seed = out.seed,
+                            durationMs = out.durationMs
+                        )
+                    }
+                    val allCreations = withContext(Dispatchers.IO) { creationsRepo.loadAllCreations() }
+                    val refreshedMetrics = withContext(Dispatchers.IO) { modelManager.inspectCurrentMetrics() }
+                    val engineBadge = if (out.usedSlot7AgingModel) "Slot 7 Aging" else activeEngine.name
+                    transientState.update {
+                        it.copy(
+                            isGenerating = false,
+                            generationProgress = null,
+                            creations = allCreations,
+                            latestGeneratedCreation = savedCreation,
+                            latestAvatarCreation = savedCreation,
+                            latestAvatarSourcePath = out.croppedSourceFile.absolutePath,
+                            metrics = refreshedMetrics,
+                            statusToastMessage = if (isTamil) {
+                                "✅ இயற்கை புகைப்பட மாற்றம் முடிந்தது (${out.durationMs / 1000}s • $engineBadge)!"
+                            } else {
+                                "✅ Realistic Avatar photo ready in ${out.durationMs / 1000}s ($engineBadge)!"
+                            }
+                        )
+                    }
+                },
+                onFailure = { err -> handlePipelineFailure(err) }
             )
         }
     }

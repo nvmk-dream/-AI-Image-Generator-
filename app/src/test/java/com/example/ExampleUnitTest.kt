@@ -327,10 +327,17 @@ class ExampleUnitTest {
         assertTrue(translated.contains("traditional silk saree"))
 
         val allLinks = com.example.ai.OnnxModelDownloadCatalog.groups.flatMap { it.links }
-        assertTrue(allLinks.size >= 8)
-        assertTrue(allLinks.all { it.url.startsWith("https://huggingface.co/") })
+        assertTrue(allLinks.size >= 12)
+        assertTrue(
+            allLinks.all {
+                it.url.startsWith("https://huggingface.co/") ||
+                    it.url.startsWith("https://storage.googleapis.com/mediapipe-models/")
+            }
+        )
         assertTrue(allLinks.any { it.url.endsWith("/unet/model_int8.onnx.data") })
         assertTrue(allLinks.any { it.url.endsWith("/unet/weights.pb") })
+        assertTrue(allLinks.any { it.url.endsWith("face_landmarker.task") })
+        assertTrue(allLinks.any { it.url.endsWith("selfie_multiclass_256x256.tflite") })
     }
 
     @Test
@@ -600,6 +607,56 @@ class ExampleUnitTest {
         } finally {
             tempRoot.deleteRecursively()
         }
+    }
+
+    @Test
+    fun avatarCustomizationCatalog_enforcesRealisticPhotographyAndSixteenPresetsAndSlot7() {
+        assertEquals(16, com.example.ai.AvatarCustomizationCatalog.presets.size)
+        for (tab in com.example.ai.AvatarCustomTab.entries) {
+            assertEquals(4, com.example.ai.AvatarCustomizationCatalog.presetsForTab(tab).size)
+        }
+
+        // Core slots stay 8 while Optional Slot 7 (FACE_AGING_ENGINE) is non-core
+        val coreSlots = com.example.ai.DedicatedModelSlot.entries.filter { it.isCoreSlot }
+        assertEquals(8, coreSlots.size)
+        assertFalse(com.example.ai.DedicatedModelSlot.FACE_AGING_ENGINE.isCoreSlot)
+
+        // Forbidden painting / 3D / animation words are stripped from user notes
+        val (cleaned, stripped) = com.example.ai.AvatarCustomizationCatalog.sanitizeCustomRealisticNote(
+            "maroon border oil painting 3d render anime cartoon"
+        )
+        assertTrue(stripped)
+        assertTrue(cleaned.contains("maroon border"))
+        assertFalse(cleaned.contains("painting", ignoreCase = true))
+        assertFalse(cleaned.contains("3d", ignoreCase = true))
+        assertFalse(cleaned.contains("anime", ignoreCase = true))
+        assertFalse(cleaned.contains("cartoon", ignoreCase = true))
+
+        // Prompts across all 4 modules strictly specify DSLR photorealistic photography
+        for (tab in com.example.ai.AvatarCustomTab.entries) {
+            val preset = com.example.ai.AvatarCustomizationCatalog.presetsForTab(tab).first()
+            val params = com.example.ai.AvatarCustomizationParams(
+                activeTab = tab,
+                selectedPresetId = preset.id,
+                customRealisticNote = "watercolor 3d natural sunlight"
+            )
+            val (prompt, strength) = com.example.ai.AvatarCustomizationCatalog.buildRealisticPromptAndStrength(params)
+            assertTrue(prompt.contains("DSLR"))
+            assertTrue(prompt.contains("photorealistic photography"))
+            assertFalse(prompt.contains("watercolor", ignoreCase = true))
+            assertTrue(strength in 0.25f..0.80f)
+        }
+
+        // Spatial 4-channel latent blending preserves unmasked reference and applies masked edit
+        val edited = floatArrayOf(10f, 10f, 10f, 10f, 20f, 20f, 20f, 20f)
+        val reference = floatArrayOf(1f, 1f, 1f, 1f, 2f, 2f, 2f, 2f)
+        val spatialMask = floatArrayOf(0f, 1f, 0.5f, 0f)
+        val blended = com.example.ai.AvatarPhotoCompositor.blendLatentStep(edited, reference, spatialMask)
+        assertEquals(1f, blended[0], 1e-4f)
+        assertEquals(10f, blended[1], 1e-4f)
+        assertEquals(5.5f, blended[2], 1e-4f)
+        assertEquals(2f, blended[4], 1e-4f)
+        assertEquals(20f, blended[5], 1e-4f)
     }
 }
 

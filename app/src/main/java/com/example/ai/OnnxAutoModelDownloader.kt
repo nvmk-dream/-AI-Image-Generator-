@@ -552,6 +552,9 @@ class OnnxAutoModelDownloader(
             DedicatedModelSlot.TOKENIZER -> {
                 File(slotDir, "source_name.meta").writeText("vocab.json + merges.txt")
             }
+            DedicatedModelSlot.FACE_AGING_ENGINE -> {
+                File(slotDir, "source_name.meta").writeText("face_aging.onnx")
+            }
         }
     }
 

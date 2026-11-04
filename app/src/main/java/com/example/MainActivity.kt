@@ -42,6 +42,7 @@ import com.example.ui.components.AutoDownloadLiveBanner
 import com.example.ui.components.DreamyHeartBackground
 import com.example.ui.components.FirstLaunchModelDownloadDialog
 import com.example.ui.components.GlassBottomNavBar
+import com.example.ui.screens.AvatarCustomizationScreen
 import com.example.ui.screens.CharacterStudioScreen
 import com.example.ui.screens.ContentSafetySettingsScreen
 import com.example.ui.screens.CreationsCollectionScreen
@@ -56,6 +57,7 @@ import com.example.ui.theme.MyApplicationTheme
 private enum class PhotoPickTarget {
     IMG2IMG_REFERENCE,
     CHARACTER_REFERENCE,
+    AVATAR_CUSTOM_SOURCE,
     IMAGE_EDITOR_SOURCE
 }
 
@@ -149,6 +151,7 @@ fun ImageGeneratorRoot(
             when (photoPickTarget) {
                 PhotoPickTarget.IMG2IMG_REFERENCE -> appViewModel.updateSelectedInputPhoto(photoUri)
                 PhotoPickTarget.CHARACTER_REFERENCE -> appViewModel.setPendingCharacterPhotoUri(photoUri)
+                PhotoPickTarget.AVATAR_CUSTOM_SOURCE -> appViewModel.setAvatarSourcePhoto(photoUri)
                 PhotoPickTarget.IMAGE_EDITOR_SOURCE -> appViewModel.setEditorImageUri(photoUri)
             }
         }
@@ -292,7 +295,10 @@ fun ImageGeneratorRoot(
                                         },
                                         onDeleteSlot = { slot ->
                                             appViewModel.deleteSlotModel(slot)
-                                        }
+                                        },
+                                        isDownloadingMediaPipe = uiState.isDownloadingMediaPipe,
+                                        mediaPipeDownloadStatus = uiState.mediaPipeDownloadStatus,
+                                        onDownloadMediaPipeTasks = appViewModel::downloadMediaPipeVisionTasks
                                     )
                                 }
                             }
@@ -412,6 +418,46 @@ fun ImageGeneratorRoot(
                                 onCancelGeneration = appViewModel::cancelGeneration,
                                 onExportToGallery = appViewModel::exportCreationToGallery,
                                 onToggleFavorite = appViewModel::toggleFavoriteCreation,
+                                onOpenModelsTab = {
+                                    appViewModel.selectBottomTab(BottomNavTab.MODELS)
+                                },
+                                onOpenContentSafetySettings = {
+                                    appViewModel.navigateToScreen(ActiveScreen.CONTENT_SAFETY_SETTINGS)
+                                },
+                                onBack = { appViewModel.navigateBackToHome() }
+                            )
+
+                            ActiveScreen.AVATAR_CUSTOMIZATION -> AvatarCustomizationScreen(
+                                preferences = uiState.preferences,
+                                metrics = uiState.metrics,
+                                sourcePhotoUri = uiState.avatarSourcePhotoUri,
+                                hasLatestAppCreation = uiState.latestGeneratedCreation != null,
+                                params = uiState.avatarParams,
+                                userBrushStrokes = uiState.avatarBrushStrokes,
+                                visionAnalysis = uiState.avatarVisionAnalysis,
+                                maskOverlayBitmap = uiState.avatarMaskOverlayBitmap,
+                                latestAvatarCreation = uiState.latestAvatarCreation,
+                                latestAvatarSourcePath = uiState.latestAvatarSourcePath,
+                                isGenerating = uiState.isGenerating,
+                                progress = uiState.generationProgress,
+                                errorMessage = uiState.generationErrorMessage,
+                                isDownloadingMediaPipe = uiState.isDownloadingMediaPipe,
+                                mediaPipeDownloadStatus = uiState.mediaPipeDownloadStatus,
+                                onSelectEngine = appViewModel::setActiveEngine,
+                                onPickSourcePhoto = {
+                                    launchPhotoPicker(PhotoPickTarget.AVATAR_CUSTOM_SOURCE)
+                                },
+                                onUseLatestAppCreation = appViewModel::useLatestCreationForAvatar,
+                                onParamsChange = appViewModel::updateAvatarParams,
+                                onAddBrushStroke = appViewModel::addAvatarBrushStroke,
+                                onUndoBrushStroke = appViewModel::undoAvatarBrushStroke,
+                                onResetBrushStrokes = appViewModel::resetAvatarBrushStrokes,
+                                onDownloadMediaPipeTasks = appViewModel::downloadMediaPipeVisionTasks,
+                                onGenerateAvatar = appViewModel::generateOfflineAvatarCustomization,
+                                onCancelGeneration = appViewModel::cancelGeneration,
+                                onUseResultAsNextSource = appViewModel::useAvatarResultAsNextSource,
+                                onToggleFavorite = appViewModel::toggleFavoriteCreation,
+                                onExportToGallery = appViewModel::exportCreationToGallery,
                                 onOpenModelsTab = {
                                     appViewModel.selectBottomTab(BottomNavTab.MODELS)
                                 },

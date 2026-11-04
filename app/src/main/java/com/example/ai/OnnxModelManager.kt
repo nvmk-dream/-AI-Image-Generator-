@@ -18,7 +18,8 @@ import java.util.concurrent.ConcurrentHashMap
 enum class DedicatedSlotGroup {
     FAST_LCM_ENGINE,
     STANDARD_SD_ENGINE,
-    ESSENTIAL_SHARED
+    ESSENTIAL_SHARED,
+    OPTIONAL_AVATAR_CUSTOM
 }
 
 enum class DedicatedModelSlot(
@@ -110,10 +111,20 @@ enum class DedicatedModelSlot(
         titleTa = "Slot 6: Tokenizer (vocab.json & merges.txt ~1 MB)",
         descriptionEn = "CLIP vocabulary & merges (~1 MB • built-in backup also active)",
         descriptionTa = "vocab.json & merges.txt (~1 MB • Built-in துணையும் தயாராக உள்ளது)"
+    ),
+    FACE_AGING_ENGINE(
+        slotTag = "7_face_aging",
+        folderName = "aging_engine",
+        group = DedicatedSlotGroup.OPTIONAL_AVATAR_CUSTOM,
+        expectedFileHint = "face_aging.onnx (~300 MB)",
+        titleEn = "Slot 7: Aging Engine (~300 MB • Optional)",
+        titleTa = "Slot 7: Aging Engine (~300 MB • விருப்ப மாடல்)",
+        descriptionEn = "Optional dedicated Face-Aging GAN / StyleGAN ONNX model for Avatar Age Progression (Core 1A–6 also works automatically)",
+        descriptionTa = "Avatar வயது மாற்றத்திற்கான பிரத்யேக Face-Aging ONNX மாடல் (~300 MB • இல்லையென்றால் Core 1A–6 தானாக இயங்கும்)"
     );
 
     val isCoreSlot: Boolean
-        get() = true
+        get() = this != FACE_AGING_ENGINE
 }
 
 data class DedicatedSlotStatus(
@@ -191,6 +202,16 @@ enum class DiffusionModelSlot(
         descriptionEn = "Encodes reference photo for Image-to-Image",
         descriptionTa = "Image-to-Image மாற்றத்திற்காக பழைய படத்தை உள்ளே எடுக்கும்",
         requiredForTxt2Img = false
+    ),
+    FACE_AGING(
+        canonicalFileName = "face_aging.onnx",
+        folderHint = "aging_engine",
+        matchKeywords = listOf("face_aging", "sam_aging", "age_progression", "stylegan_age"),
+        titleEn = "5. Aging Engine (Optional Slot 7)",
+        titleTa = "5. Aging Engine (விருப்ப Slot 7)",
+        descriptionEn = "Optional dedicated Face-Aging ONNX model (~300 MB)",
+        descriptionTa = "வயது மாற்றத்திற்கான விருப்ப ONNX மாடல் (~300 MB)",
+        requiredForTxt2Img = false
     )
 }
 
@@ -254,7 +275,8 @@ data class RealDeviceAndModelMetrics(
     val deviceAvailableRamBytes: Long = 0L,
     val hasTokenizerFiles: Boolean = false,
     val activeRamSessionsCount: Int = 0,
-    val phoneModelsFolderPath: String = ""
+    val phoneModelsFolderPath: String = "",
+    val mediaPipeTasksStatus: MediaPipeTasksStatus = MediaPipeTasksStatus()
 ) {
     val coreDedicatedSlots: List<DedicatedSlotStatus>
         get() = dedicatedSlots.filter { it.slot.isCoreSlot }
@@ -267,6 +289,13 @@ data class RealDeviceAndModelMetrics(
 
     val essentialSharedDedicatedSlots: List<DedicatedSlotStatus>
         get() = dedicatedSlots.filter { it.slot.group == DedicatedSlotGroup.ESSENTIAL_SHARED }
+
+    val optionalAvatarDedicatedSlots: List<DedicatedSlotStatus>
+        get() = dedicatedSlots.filter { it.slot.group == DedicatedSlotGroup.OPTIONAL_AVATAR_CUSTOM }
+
+    val isAgingSlotInstalled: Boolean
+        get() = dedicatedSlots.any { it.slot == DedicatedModelSlot.FACE_AGING_ENGINE && it.isInstalled } ||
+            slots.any { it.slot == DiffusionModelSlot.FACE_AGING && it.isInstalled }
 
     val coreInstalledCount: Int
         get() = coreDedicatedSlots.count { it.isInstalled }
@@ -686,6 +715,16 @@ class OnnxModelManager(private val context: Context) {
         val memInfo = ActivityManager.MemoryInfo()
         am?.getMemoryInfo(memInfo)
 
+        val mpDir = File(modelsRootDir, MediaPipeAvatarVisionEngine.VISION_FOLDER_NAME)
+        val mpFaceOk = File(mpDir, MediaPipeAvatarVisionEngine.FACE_TASK_FILENAME).let { it.exists() && it.length() > 500_000L }
+        val mpPoseOk = File(mpDir, MediaPipeAvatarVisionEngine.POSE_TASK_FILENAME).let { it.exists() && it.length() > 500_000L }
+        val mpSegOk = File(mpDir, MediaPipeAvatarVisionEngine.MULTICLASS_SEG_FILENAME).let { it.exists() && it.length() > 200_000L }
+        val mpBytes = listOf(
+            File(mpDir, MediaPipeAvatarVisionEngine.FACE_TASK_FILENAME),
+            File(mpDir, MediaPipeAvatarVisionEngine.POSE_TASK_FILENAME),
+            File(mpDir, MediaPipeAvatarVisionEngine.MULTICLASS_SEG_FILENAME)
+        ).filter { it.exists() }.sumOf { it.length() }
+
         return RealDeviceAndModelMetrics(
             ortRuntimeAvailable = ortOk,
             ortVersion = ortVer,
@@ -701,7 +740,13 @@ class OnnxModelManager(private val context: Context) {
             deviceAvailableRamBytes = memInfo.availMem,
             hasTokenizerFiles = hasTokenizer,
             activeRamSessionsCount = activeSessions.size,
-            phoneModelsFolderPath = phoneModelsDisplayPath
+            phoneModelsFolderPath = phoneModelsDisplayPath,
+            mediaPipeTasksStatus = MediaPipeTasksStatus(
+                faceLandmarkerInstalled = mpFaceOk,
+                poseLandmarkerInstalled = mpPoseOk,
+                multiclassSegmenterInstalled = mpSegOk,
+                totalInstalledBytes = mpBytes
+            )
         )
     }
 
@@ -909,6 +954,36 @@ class OnnxModelManager(private val context: Context) {
                 )
             }
         }
+
+        // Slot 7: Optional Face-Aging ONNX Model (~300 MB)
+        val agingFile = resolveExistingSlotFile(DiffusionModelSlot.FACE_AGING)
+        val agingDir = slotDir(DiffusionModelSlot.FACE_AGING)
+        val agingMissing = if (agingFile != null) findMissingCompanionFiles(agingFile) else emptyList()
+        val agingInstalled = agingFile != null && agingMissing.isEmpty()
+        val agingPartial = agingFile != null && agingMissing.isNotEmpty()
+        val agingSrcName = File(agingDir, "source_name.meta").takeIf { it.exists() }
+            ?.readText()?.trim().orEmpty().ifBlank { agingFile?.name ?: DedicatedModelSlot.FACE_AGING_ENGINE.expectedFileHint }
+        val agingBytes = agingFile?.length() ?: 0L
+
+        result.add(
+            DedicatedSlotStatus(
+                slot = DedicatedModelSlot.FACE_AGING_ENGINE,
+                isInstalled = agingInstalled,
+                isPartial = agingPartial,
+                sizeBytes = agingBytes,
+                displayFileName = if (agingInstalled || agingPartial) agingSrcName else DedicatedModelSlot.FACE_AGING_ENGINE.expectedFileHint,
+                statusDetailEn = when {
+                    agingInstalled -> "✅ $agingSrcName • ${formatBytes(agingBytes)} (Dedicated Aging Active)"
+                    agingPartial -> "⚠️ Missing external weights: ${agingMissing.joinToString()}"
+                    else -> "Optional (~300 MB) • Core 1A–6 Age Inpainting active automatically"
+                },
+                statusDetailTa = when {
+                    agingInstalled -> "✅ $agingSrcName • ${formatBytes(agingBytes)} (பிரத்யேக Aging தயார்)"
+                    agingPartial -> "⚠️ விடுபட்டுள்ளது: ${agingMissing.joinToString()}"
+                    else -> "விருப்ப மாடல் (~300 MB) • இது இல்லாமலும் Core 1A–6 மூலம் Age மாற்றம் இயங்கும்"
+                }
+            )
+        )
 
         return result
     }
@@ -1216,6 +1291,7 @@ class OnnxModelManager(private val context: Context) {
             DiffusionModelSlot.UNET -> DedicatedModelSlot.FAST_LCM_GRAPH
             DiffusionModelSlot.VAE_DECODER -> DedicatedModelSlot.VAE_DECODER
             DiffusionModelSlot.VAE_ENCODER -> DedicatedModelSlot.VAE_ENCODER
+            DiffusionModelSlot.FACE_AGING -> DedicatedModelSlot.FACE_AGING_ENGINE
         }
         return importDedicatedSlotFromUri(uri, mapped, originalNameHint, onProgress).map { it.second }
     }
@@ -1384,6 +1460,7 @@ class OnnxModelManager(private val context: Context) {
             DedicatedModelSlot.VAE_DECODER,
             DedicatedModelSlot.VAE_ENCODER,
             DedicatedModelSlot.TOKENIZER,
+            DedicatedModelSlot.FACE_AGING_ENGINE,
             DedicatedModelSlot.STANDARD_SD_GRAPH,
             DedicatedModelSlot.STANDARD_SD_WEIGHTS
         )
@@ -1448,6 +1525,7 @@ class OnnxModelManager(private val context: Context) {
         if (fastLink.isPairLinked || stdLink.isPairLinked) legacyImported.add(DiffusionModelSlot.UNET)
         if (DedicatedModelSlot.VAE_DECODER in importedDedicated) legacyImported.add(DiffusionModelSlot.VAE_DECODER)
         if (DedicatedModelSlot.VAE_ENCODER in importedDedicated) legacyImported.add(DiffusionModelSlot.VAE_ENCODER)
+        if (DedicatedModelSlot.FACE_AGING_ENGINE in importedDedicated) legacyImported.add(DiffusionModelSlot.FACE_AGING)
 
         val primaryVariant = when {
             fastLink.isPairLinked -> UnetVariant.FAST_LCM_INT8
@@ -1983,7 +2061,8 @@ class OnnxModelManager(private val context: Context) {
             val explicitNonUnet = listOf(
                 DedicatedModelSlot.TEXT_ENCODER to DiffusionModelSlot.TEXT_ENCODER,
                 DedicatedModelSlot.VAE_DECODER to DiffusionModelSlot.VAE_DECODER,
-                DedicatedModelSlot.VAE_ENCODER to DiffusionModelSlot.VAE_ENCODER
+                DedicatedModelSlot.VAE_ENCODER to DiffusionModelSlot.VAE_ENCODER,
+                DedicatedModelSlot.FACE_AGING_ENGINE to DiffusionModelSlot.FACE_AGING
             )
             for ((dedSlot, diffSlot) in explicitNonUnet) {
                 val match = onnxCandidates.firstOrNull { cand ->

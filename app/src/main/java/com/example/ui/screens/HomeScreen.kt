@@ -204,7 +204,7 @@ fun HomeScreen(
                     }
                 }
 
-                // Row 2: Character | Avatar Customization (Blank Card — No Operation on Tap)
+                // Row 2: Character | Avatar Customization (Visual / Character Attributes)
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -221,7 +221,7 @@ fun HomeScreen(
                         title = "Avatar\nCustomization",
                         imageResId = R.drawable.img_card_avatar_custom,
                         testTag = "card_avatar_customization",
-                        onClick = null,
+                        onClick = { onSelectFeature(ActiveScreen.AVATAR_CUSTOMIZATION) },
                         modifier = Modifier.weight(1f)
                     )
                 }

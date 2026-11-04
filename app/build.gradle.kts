@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.imagegenerator.nvmkai"
     minSdk = 24
     targetSdk = 36
-    versionCode = 113
-    versionName = "2.2.0"
+    versionCode = 114
+    versionName = "2.3.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -123,6 +123,7 @@ dependencies {
   // implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
   implementation(libs.onnxruntime.android)
+  implementation(libs.mediapipe.tasks.vision)
   // implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   // Uncomment to use Firestore:
