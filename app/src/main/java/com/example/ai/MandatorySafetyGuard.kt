@@ -69,6 +69,7 @@ object MandatorySafetyGuard {
         val stripped = userPrompt
             .replace(ContentSafetyDefaults.STRICT_TEMPLATE_PROMPT, " ", ignoreCase = true)
             .replace(ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT, " ", ignoreCase = true)
+            .replace(ContentSafetyDefaults.ADULT_OPEN_TEMPLATE_PROMPT, " ", ignoreCase = true)
             .lowercase(Locale.US)
 
         firstMatch(stripped, prohibitedCoreTerms)?.let { term ->
