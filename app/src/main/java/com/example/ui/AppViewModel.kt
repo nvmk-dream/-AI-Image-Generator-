@@ -308,6 +308,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun saveImageNegativePrompt(prompt: String) {
+        viewModelScope.launch {
+            prefsRepo.saveImageNegativePrompt(prompt)
+            transientState.update { it.copy(statusToastMessage = "Image Negative saved on device.") }
+        }
+    }
+
+    fun resetImageNegativePrompt() {
+        viewModelScope.launch {
+            prefsRepo.resetImageNegativePrompt()
+            transientState.update { it.copy(statusToastMessage = "Image Negative reset to default.") }
+        }
+    }
+
     fun resetContentSafetyPrompt() {
         viewModelScope.launch {
             prefsRepo.resetContentSafetyPrompt()
@@ -1614,6 +1628,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     userBrushStrokes = snapshot.avatarBrushStrokes,
                     visionEngine = avatarVisionEngine,
                     safetyTailPrompt = safetyTail,
+                    extraNegativePrompt = snapshot.preferences.imageNegativePrompt,
                     resolutionLabel = snapshot.preferences.resolution,
                     inferenceMode = snapshot.preferences.inferenceMode,
                     samplerType = sampler,

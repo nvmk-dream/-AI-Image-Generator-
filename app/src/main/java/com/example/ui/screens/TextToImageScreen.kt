@@ -129,9 +129,8 @@ fun TextToImageScreen(
         mutableFloatStateOf(if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) 1.5f else 7.0f)
     }
     var seed by remember { mutableLongStateOf(Random.nextLong(100_000L, 999_999_999L)) }
-    var negativePrompt by remember {
-        mutableStateOf("blurry, low quality, deformed hands, distorted face, extra limbs")
-    }
+    // From Settings → Content Safety → Image Negative
+    val negativePrompt = preferences.imageNegativePrompt
     var showSafetyCombinedPreview by remember { mutableStateOf(false) }
     var liveElapsedSec by remember { mutableIntStateOf(0) }
 

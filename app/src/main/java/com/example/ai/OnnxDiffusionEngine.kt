@@ -821,6 +821,7 @@ class OnnxDiffusionEngine(
         userBrushStrokes: List<MaskBrushStroke>,
         visionEngine: MediaPipeAvatarVisionEngine,
         safetyTailPrompt: String,
+        extraNegativePrompt: String = "",
         resolutionLabel: String,
         inferenceMode: String,
         samplerType: SamplerType,
@@ -1033,7 +1034,12 @@ class OnnxDiffusionEngine(
 
             val normalizedClipPrompt = OfflineTamilPromptTranslator.normalizeForClip(finalPositiveInput)
             val posTokenIds = tokenizer.encode(normalizedClipPrompt)
-            val negTokenIds = tokenizer.encode(AvatarCustomizationCatalog.STRICT_ANTI_NON_PHOTO_NEGATIVE_PROMPT)
+            // Avatar's own list first, then the user's Settings → Image Negative list
+            val negTokenIds = tokenizer.encode(
+                listOf(AvatarCustomizationCatalog.STRICT_ANTI_NON_PHOTO_NEGATIVE_PROMPT, extraNegativePrompt)
+                    .filter { it.isNotBlank() }
+                    .joinToString(", ")
+            )
 
             val (posEmbeddings, negEmbeddings, hiddenDim) = createSafeSession(env, textEncoderFile, inferenceMode).use { teSession ->
                 val posOut = runTextEncoder(env, teSession, posTokenIds)

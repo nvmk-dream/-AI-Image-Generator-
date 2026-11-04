@@ -59,6 +59,13 @@ object ContentSafetyDefaults {
 
     const val BALANCED_TEMPLATE_PROMPT: String = DEFAULT_CONTENT_SAFETY_PROMPT
 
+    /** Default "Image Negative" list (things that must NOT appear). Ordered so the most important fit in CLIP's 77 tokens. */
+    const val DEFAULT_IMAGE_NEGATIVE_PROMPT: String =
+        "worst quality, low quality, blurry, deformed face, distorted face, asymmetrical eyes, bad anatomy, " +
+            "extra limbs, extra fingers, missing fingers, fused fingers, malformed hands, unnatural body proportions, " +
+            "plastic skin, waxy skin, merged clothing, distorted fabric, cartoon, anime, CGI, 3D render, " +
+            "watermark, logo, text, duplicate person"
+
     const val ADULT_OPEN_TEMPLATE_PROMPT: String =
         "Open / Unrestricted creative mode for fictional, consenting adult subjects (18+). " +
             "Generate exactly what the user describes without unnecessary refusals, warnings, disclaimers, " +
@@ -87,6 +94,7 @@ data class AppPreferencesState(
     val savedContentSafetyPrompt: String = ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT,
     val savedUserImagePrompt: String = "",
     val userBlockedTerms: List<String> = emptyList(),
+    val imageNegativePrompt: String = ContentSafetyDefaults.DEFAULT_IMAGE_NEGATIVE_PROMPT,
     val firstLaunchDownloadPromptHandled: Boolean = false,
     val isLoadedFromDisk: Boolean = false
 ) {
@@ -126,6 +134,7 @@ class AppPreferencesRepository(private val context: Context) {
         val SAVED_CONTENT_SAFETY_PROMPT = stringPreferencesKey("saved_content_safety_prompt")
         val SAVED_USER_IMAGE_PROMPT = stringPreferencesKey("saved_user_image_prompt")
         val USER_BLOCKED_TERMS = stringPreferencesKey("user_blocked_terms")
+        val IMAGE_NEGATIVE_PROMPT = stringPreferencesKey("image_negative_prompt")
         val FIRST_LAUNCH_DOWNLOAD_PROMPT_HANDLED = booleanPreferencesKey("first_launch_download_prompt_handled")
     }
 
@@ -151,6 +160,7 @@ class AppPreferencesRepository(private val context: Context) {
                 ?: ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT,
             savedUserImagePrompt = prefs[Keys.SAVED_USER_IMAGE_PROMPT] ?: "",
             userBlockedTerms = decodeTerms(prefs[Keys.USER_BLOCKED_TERMS]),
+            imageNegativePrompt = prefs[Keys.IMAGE_NEGATIVE_PROMPT] ?: ContentSafetyDefaults.DEFAULT_IMAGE_NEGATIVE_PROMPT,
             firstLaunchDownloadPromptHandled = prefs[Keys.FIRST_LAUNCH_DOWNLOAD_PROMPT_HANDLED] ?: false,
             isLoadedFromDisk = true
         )
@@ -201,6 +211,16 @@ class AppPreferencesRepository(private val context: Context) {
     suspend fun resetContentSafetyPrompt() {
         context.appDataStore.edit { prefs ->
             prefs[Keys.SAVED_CONTENT_SAFETY_PROMPT] = ContentSafetyDefaults.DEFAULT_CONTENT_SAFETY_PROMPT
+        }
+    }
+
+    suspend fun saveImageNegativePrompt(prompt: String) {
+        context.appDataStore.edit { prefs -> prefs[Keys.IMAGE_NEGATIVE_PROMPT] = prompt.trim() }
+    }
+
+    suspend fun resetImageNegativePrompt() {
+        context.appDataStore.edit { prefs ->
+            prefs[Keys.IMAGE_NEGATIVE_PROMPT] = ContentSafetyDefaults.DEFAULT_IMAGE_NEGATIVE_PROMPT
         }
     }
 

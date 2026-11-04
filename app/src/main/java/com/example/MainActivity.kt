@@ -334,6 +334,8 @@ fun ImageGeneratorRoot(
                                 onSaveContentSafetyPrompt = appViewModel::saveContentSafetyPrompt,
                                 onResetContentSafetyPrompt = appViewModel::resetContentSafetyPrompt,
                                 onAddBlockedTerm = { appViewModel.addUserBlockedTerm(it) },
+                                onSaveImageNegativePrompt = appViewModel::saveImageNegativePrompt,
+                                onResetImageNegativePrompt = appViewModel::resetImageNegativePrompt,
                                 onRemoveBlockedTerm = { appViewModel.removeUserBlockedTerm(it) }
                             )
 

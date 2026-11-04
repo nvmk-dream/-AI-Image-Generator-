@@ -77,6 +77,8 @@ fun ContentSafetySettingsScreen(
     onResetContentSafetyPrompt: () -> Unit,
     onAddBlockedTerm: (String) -> Unit,
     onRemoveBlockedTerm: (String) -> Unit,
+    onSaveImageNegativePrompt: (String) -> Unit,
+    onResetImageNegativePrompt: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
@@ -369,6 +371,17 @@ fun ContentSafetySettingsScreen(
                 onRemove = onRemoveBlockedTerm
             )
 
+            // Image Negative Card (things that must NOT appear in images)
+            ImageNegativeCard(
+                darkTheme = darkTheme,
+                isTamil = isTamil,
+                primaryColor = primaryColor,
+                subColor = subColor,
+                savedText = preferences.imageNegativePrompt,
+                onSave = onSaveImageNegativePrompt,
+                onReset = onResetImageNegativePrompt
+            )
+
             // Live Final Generation Input Preview Card
             FrostedGlassCard(darkTheme = darkTheme) {
                 Text(
@@ -492,6 +505,121 @@ private fun MyBlockWordsCard(
                         .testTag("block_word_remove_$term")
                 )
             }
+        }
+    }
+}
+
+private const val CLIP_TOKEN_BUDGET = 75
+
+/** Rough CLIP token count (words + punctuation), and the first comma-part that falls past the 75 limit. */
+private fun estimateNegativeTokens(text: String): Pair<Int, String?> {
+    val tokenRegex = Regex("""\w+|[^\w\s]""")
+    var used = 0
+    var firstIgnored: String? = null
+    text.split(',').forEachIndexed { index, part ->
+        used += tokenRegex.findAll(part).count() + if (index > 0) 1 else 0
+        if (firstIgnored == null && used > CLIP_TOKEN_BUDGET && part.isNotBlank()) firstIgnored = part.trim()
+    }
+    return used to firstIgnored
+}
+
+@Composable
+private fun ImageNegativeCard(
+    darkTheme: Boolean,
+    isTamil: Boolean,
+    primaryColor: Color,
+    subColor: Color,
+    savedText: String,
+    onSave: (String) -> Unit,
+    onReset: () -> Unit
+) {
+    var text by rememberSaveable { mutableStateOf(savedText) }
+    var editing by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(savedText) { if (!editing) text = savedText }
+    val (used, firstIgnored) = estimateNegativeTokens(text)
+
+    FrostedGlassCard(darkTheme = darkTheme) {
+        Text(
+            text = "Image Negative",
+            color = primaryColor,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = if (isTamil) {
+                "Image-ல வரக்கூடாதவை. Text-to-Image, Image-to-Image இதை பயன்படுத்தும். Character Studio, Avatar தங்கள் list-உடன் இதை சேர்க்கும்."
+            } else {
+                "Things that must not appear. Used by Text-to-Image and Image-to-Image; Character Studio and Avatar add it to their own list."
+            },
+            color = subColor,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        OutlinedTextField(
+            value = text,
+            onValueChange = {
+                text = it
+                editing = true
+            },
+            enabled = editing,
+            minLines = 4,
+            maxLines = 20,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("image_negative_editor")
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = "~$used / $CLIP_TOKEN_BUDGET used",
+            color = if (used > CLIP_TOKEN_BUDGET) VibrantPinkPill else NeonReadyGreen,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+            modifier = Modifier.testTag("image_negative_token_count")
+        )
+        if (firstIgnored != null) {
+            Text(
+                text = if (isTamil) {
+                    "\"$firstIgnored\" முதல் மீதி ignore ஆகும் (AI model limit)."
+                } else {
+                    "Ignored from \"$firstIgnored\" onward (AI model limit)."
+                },
+                color = VibrantPinkPill,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.testTag("image_negative_ignored_hint")
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            SafetyActionButton(
+                label = "Edit",
+                icon = Icons.Filled.Edit,
+                gradient = listOf(Color(0xFF5C6BC0), Color(0xFF3949AB)),
+                testTag = "image_negative_edit_button",
+                onClick = { editing = true },
+                modifier = Modifier.weight(1f)
+            )
+            SafetyActionButton(
+                label = "Save",
+                icon = Icons.Filled.Save,
+                gradient = listOf(PinkGlowStart, PinkGlowEnd),
+                testTag = "image_negative_save_button",
+                onClick = {
+                    onSave(text)
+                    editing = false
+                },
+                modifier = Modifier.weight(1f)
+            )
+            SafetyActionButton(
+                label = "Reset",
+                icon = Icons.Filled.RestartAlt,
+                gradient = listOf(PurpleActionStart, PurpleActionEnd),
+                testTag = "image_negative_reset_button",
+                onClick = {
+                    text = ContentSafetyDefaults.DEFAULT_IMAGE_NEGATIVE_PROMPT
+                    editing = false
+                    onReset()
+                },
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }

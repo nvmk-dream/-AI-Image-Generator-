@@ -160,7 +160,11 @@ fun CharacterStudioScreen(
     var guidanceScale by remember {
         mutableFloatStateOf(if (preferences.activeEngine == ActiveDiffusionEngine.FAST_LCM) 1.5f else 7.0f)
     }
-    val negativePrompt = "blurry, deformed hands, distorted face, low quality, extra fingers"
+    // Character Studio's own list first, then the user's Settings → Image Negative list
+    val negativePrompt = listOf(
+        "blurry, deformed hands, distorted face, low quality, extra fingers",
+        preferences.imageNegativePrompt
+    ).filter { it.isNotBlank() }.joinToString(", ")
     var showCombinedSafety by remember { mutableStateOf(false) }
 
     LaunchedEffect(preferences.activeEngine) {
